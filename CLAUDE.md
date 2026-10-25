@@ -4,26 +4,48 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-This repo is at the **pre-implementation stage**. It has no firmware code yet. It contains only:
+The project uses **PlatformIO with the Arduino framework** (pioarduino platform 53.03.13 = Arduino-ESP32 3.1.3 on ESP-IDF 5.3). The user confirmed this choice. Arduino core 3.x APIs differ from 2.x (e.g. `esp_task_wdt_config_t`, the RMT/LEDC APIs), so check that any library you add supports core 3.x.
+
+Development follows the staged plan in spec §19–20. **Phase 1** (board bring-up: chip ID, serial, restart, watchdog) is done. Work through the later phases in order.
 
 - `docs/ESP32_R201_Meteo_Stanica_Specifikacija.md`: the full functional and technical spec (in Serbian). It is the source of truth for requirements. Read the relevant section before you implement any module.
-- `docs/Front.jpg` / `docs/Back.jpg`: photos of the actual dev board, used to identify the hardware.
+- `docs/Front.jpg` / `docs/Back.jpg`: photos of the actual dev board.
 
 Git remote `origin` points to the user's GitHub repo. Do not push until the user explicitly approves it (the agreed plan is to push when the project is finished).
 
-The spec says the framework (ESP-IDF vs. Arduino-on-ESP32, with PlatformIO as the build environment) **must be confirmed with the user before implementation starts**. Do not mix APIs or libraries across frameworks or framework versions without checking compatibility.
+## Commands
+
+```
+pio run                          # build
+pio run -t upload                # build + flash (COM7, set in platformio.ini)
+pio run -t uploadfs              # flash LittleFS image from data/
+pio device monitor               # serial monitor (115200, exception decoder)
+pio test -f test_<name>          # run one on-device test suite (test/test_<name>/)
+```
+
+`pio device monitor` is interactive. To capture serial output non-interactively, open COM7 with pyserial from PlatformIO's Python (`~/.platformio/penv/Scripts/python.exe`). Set `dtr=False, rts=False` before `open()`, and pulse RTS to reset the board. The firmware prints Serbian (UTF-8) text, so call `sys.stdout.reconfigure(encoding='utf-8')`, or Windows' cp1252 console will crash on `č/ć/š`.
+
+The Phase 1 firmware accepts single-character serial commands: `i` (chip info), `s` (status), `r` (restart), `w` (deliberately hang the loop to test the watchdog), `h` (help).
 
 ## Language
 
-The project language and all user-facing text (web UI, OLED, log messages shown to the user, docs) are **Serbian** (Latin script, as used in the spec). Code identifiers, MQTT topics, JSON keys and REST routes are English/snake_case, as given in the spec.
+The project language and all user-facing text (web UI, OLED, log messages, docs, code comments) are **Serbian** (Latin script). Code identifiers, MQTT topics, JSON keys and REST routes are English/snake_case, as given in the spec.
 
-## Hardware (identified from the board photos)
+## Hardware (confirmed in Phase 1)
 
-- The board is a **NodeMCU ESP-32S V1.1** (38-pin) with a CP2102 USB-UART bridge and a USB-C port. It uses an ESP-32S/WROOM-class module (classic ESP32, Xtensa dual-core). It connects on **COM7**. Before you rely on the exact chip variant, flash size, or whether PSRAM is present, confirm them with `esptool.py --port COM7 chip_id` / `flash_id`.
-- GPIO16/17 are broken out on the header, which suggests no PSRAM. That makes them usable for UART2 (SPS30), as the spec proposes.
-- **Never use** the SD0–SD3/CLK pins (GPIO6–11, internal flash). Use strapping pins (GPIO0, 2, 5, 12, 15) only with care: GPIO12 must be low at boot. GPIO34–39 (incl. SVP/SVN) are input-only with no internal pull-ups.
-- Proposed pins from the spec: I2C SDA=21, SCL=22 (shared by BME680, MPU9250/6500/9255, LTR-390 and the SSD1306 128×32 OLED); SPS30 UART2 RX=16, TX=17; WS2812B LED data=27 (driven via the RMT peripheral, not bit-banged; 5 V supply, 3.3→5 V level shifter recommended). Keep all pin assignments in one header (`include/pins.h` in the proposed layout).
-- Open hardware questions (spec §22) include the exact MPU variant (MPU6500 has no magnetometer, so detect it at runtime), whether the OLED is at 0x3C or 0x3D, whether the SPS30 is on UART or I2C, and whether all modules are 3.3 V tolerant.
+- **NodeMCU ESP-32S V1.1** (38-pin, USB-C, CP2102 on **COM7**). The chip is an **ESP32-D0WD-V3 rev v3.1**: dual core at 240 MHz, **4 MB flash, no PSRAM**. The partition table is `default.csv` (2 × 1.25 MB OTA apps + 1.375 MB LittleFS).
+- With no PSRAM, GPIO16/17 are free for UART2 (SPS30).
+- **Never use** GPIO6–11 (internal flash). Use strapping pins (GPIO0, 2, 5, 12, 15) only with care: GPIO12 must be low at boot. GPIO34–39 are input-only with no internal pull-ups.
+- All pin assignments live in `include/pins.h`: I2C SDA=21/SCL=22 (BME680, MPU9250/6500/9255, LTR-390, SSD1306 128×32 OLED), SPS30 UART2 RX=16/TX=17, WS2812B data=27, status LED=2 (not yet visually confirmed), BOOT button=0.
+- WS2812B must be driven via the RMT peripheral, not bit-banged. It runs on a 5 V supply, and a 3.3→5 V level shifter is recommended.
+- Open hardware questions (spec §22) include the exact MPU variant (MPU6500 has no magnetometer, so detect it at runtime), whether the OLED is at 0x3C or 0x3D, whether the SPS30 is on UART or I2C, and the WS2812B form factor and LED count.
+
+## Code layout
+
+- `include/config.h` holds firmware constants (`FW_VERSION`, intervals, watchdog timeout).
+- `include/log.h` provides the `LOG_E/W/I/D(tag, fmt, ...)` macros (levels ERROR/WARN/INFO/DEBUG, gated by `LOG_LEVEL`). Use these instead of raw `Serial.print`.
+- Modules are `src/<module>.cpp/.h` pairs with a namespace-scoped API, e.g. `diagnostics::begin()`. `main.cpp` only wires modules together and runs the non-blocking loop.
+- The loop task is subscribed to the task watchdog (8 s, panic on timeout). Every new blocking path must keep calling `esp_task_wdt_reset()` or, better, never block.
 
 ## Architecture (as specified)
 
@@ -32,32 +54,24 @@ The firmware is modular, with one manager per concern (spec §4.1 and the propos
 Cross-cutting rules that apply to every module:
 
 - **Standalone first.** Measuring, the OLED, the local web UI and local history must keep working without Wi-Fi, MQTT, Home Assistant or the internet.
-- **Nothing blocks.** A missing sensor, Wi-Fi loss, MQTT loss or an OLED failure must not stall other modules. Use no long `delay()` calls in the main loop. Reconnects are non-blocking with backoff. Enable the watchdog. Never reboot the whole device over a single sensor error. Retry init for sensors that weren't found.
+- **Nothing blocks.** A missing sensor, Wi-Fi loss, MQTT loss or an OLED failure must not stall other modules. Use no long `delay()` calls in the main loop. Reconnects are non-blocking with backoff. Never reboot the whole device over a single sensor error. Retry init for sensors that weren't found.
 - **Every reading carries metadata:** value, unit, timestamp, sensor status, validity flag and error code. Invalid, stale or out-of-range values are never shown or stored as valid. Distinguish `unknown`, `unavailable` and a numeric value in the web UI, the API and MQTT.
 - **Honest derived values.** BME680 does not measure CO₂: label IAQ/eCO₂ as derived and only expose them if a proper algorithm such as BSEC is used. Compute the LTR-390 UV index through calibration, never from raw ADC counts. Gauge color thresholds must come from cited standards or be labeled as user thresholds. The LED uses the EEA EAQI scale (worse of the PM2.5/PM10 levels) and must never show the "good" color when the PM reading is invalid or stale.
 - **Flash wear.** Keep config in NVS/Preferences. Store history in LittleFS as 1–5 min aggregates (min/max/avg/count) in a ring buffer. Never write each sample to flash.
 - **Time.** Store time internally as UTC and display it in `Europe/Belgrade` (ESP32 has no tz database, so use the POSIX string `CET-1CEST,M3.5.0,M10.5.0/3`). Mark time as unreliable until NTP sync succeeds (detect it with the SNTP callback). The web UI header shows device date/time with a sync-status indicator. Full requirements, statuses and `/api/v1/time` are in spec §12.
-- **Secrets.** Never log passwords or MQTT credentials, and never return them from GET endpoints. Config-changing endpoints (POST/PUT) and OTA require auth. The setup AP (`METEO-ESP32-SETUP`) is password-protected.
+- **Secrets.** Never log passwords or MQTT credentials, and never return them from GET endpoints. Config-changing endpoints (POST/PUT) and OTA require auth. The setup AP (`METEO-ESP32-SETUP`) is password-protected. Credentials for local testing belong in the git-ignored `include/secrets.h`.
 
 Interfaces defined in the spec (follow them exactly):
 
 - MQTT base topic: `meteo/esp32_r201/<metric>`. Also publish a combined JSON payload, plus `availability` (`online`/`offline`) via LWT. Home Assistant Discovery configs are retained and include `unique_id`, `device_class`, `state_class`, unit and `availability_topic`.
-- REST API under `/api/v1/` (`status`, `sensors`, `readings`, `history`, `statistics`, `config`, `wifi`, `mqtt`, `alarms`, `system`). Response keys carry unit suffixes, e.g. `temperature_c` and `pm2_5_ugm3` (spec §13).
-- The partition scheme must leave room for OTA partitions.
+- REST API under `/api/v1/` (`status`, `sensors`, `readings`, `history`, `statistics`, `config`, `wifi`, `mqtt`, `alarms`, `system`, `time`, `led`). Response keys carry unit suffixes, e.g. `temperature_c` and `pm2_5_ugm3` (spec §13).
+- The web UI shows, for every sensor and peripheral, how it is wired: interface, controller pins as `GPIOxx (Pxx board label)` with each pin's role, I2C address/baud and status (spec §6.6). The firmware serves this via `/api/v1/sensors` from the same `pins.h` definitions it uses for init. Never hard-code pins in the web files.
 - At boot, the OLED shows connection info first: the full IP/SSID/RSSI, or the setup-AP SSID, password and IP while the portal is active. Only then does it start rotating measurement pages (spec §10.1).
 
 ## Development approach
 
-The spec defines a staged bring-up (§19–20): first the bare ESP32, then an I2C scan, then each sensor individually, then SPS30, OLED/WS2812B LED, Wi-Fi/web, MQTT/HA, history/alarms, and finally a 24–72 h soak test. Work in this order. Each sensor should be testable on its own (the proposed `test/test_<sensor>/` directories).
+Follow the staged bring-up in spec §19–20: bare ESP32 (done), then an I2C scan and each sensor individually, then SPS30, OLED/WS2812B LED, Wi-Fi/web, MQTT/HA, history/alarms, and finally a 24–72 h soak test. Each sensor should be testable on its own (`test/test_<sensor>/`).
 
-## Commands
+## Git
 
-There are no build files yet. Once a PlatformIO project (`platformio.ini`) exists, the usual commands are:
-
-```
-pio run                          # build
-pio run -t upload                # flash firmware (upload_port = COM7)
-pio run -t uploadfs              # flash LittleFS image from data/
-pio device monitor -p COM7       # serial monitor
-pio test -e <env> -f test_bme680 # run a single test suite on the device
-```
+Commits are authored as the user (`Zoran Nikolić`, configured in the local repo config). Do **not** add `Co-Authored-By: Claude` or "Generated with Claude Code" lines; the user explicitly asked for this.
