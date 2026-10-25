@@ -10,5 +10,8 @@
 // Task watchdog za glavnu petlju
 #define WDT_TIMEOUT_MS    8000
 
+// I2C magistrala: 100 kHz za početno testiranje (specifikacija §3.1)
+#define I2C_FREQUENCY_HZ  100000
+
 // Interval periodičnog ispisa statusa na serijski port
 #define STATUS_INTERVAL_MS 10000

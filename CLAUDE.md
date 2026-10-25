@@ -25,7 +25,7 @@ pio test -f test_<name>          # run one on-device test suite (test/test_<name
 
 `pio device monitor` is interactive. To capture serial output non-interactively, open COM7 with pyserial from PlatformIO's Python (`~/.platformio/penv/Scripts/python.exe`). Set `dtr=False, rts=False` before `open()`, and pulse RTS to reset the board. The firmware prints Serbian (UTF-8) text, so call `sys.stdout.reconfigure(encoding='utf-8')`, or Windows' cp1252 console will crash on `č/ć/š`.
 
-The Phase 1 firmware accepts single-character serial commands: `i` (chip info), `s` (status), `r` (restart), `w` (deliberately hang the loop to test the watchdog), `h` (help).
+The firmware accepts single-character serial commands: `i` (chip info), `s` (status), `c` (I2C scan with chip-ID identification), `t` (I2C reliability test at 100/400 kHz), `r` (restart), `w` (deliberately hang the loop to test the watchdog), `h` (help).
 
 ## Language
 
@@ -38,7 +38,8 @@ The project language and all user-facing text (web UI, OLED, log messages, docs,
 - **Never use** GPIO6–11 (internal flash). Use strapping pins (GPIO0, 2, 5, 12, 15) only with care: GPIO12 must be low at boot. GPIO34–39 are input-only with no internal pull-ups.
 - All pin assignments live in `include/pins.h`: I2C SDA=21/SCL=22 (BME680, MPU9250/6500/9255, LTR-390, SSD1306 128×32 OLED), SPS30 UART2 RX=16/TX=17, WS2812B data=27, onboard blue status LED=2 (confirmed), BOOT button=0.
 - WS2812B must be driven via the RMT peripheral, not bit-banged. It runs on a 5 V supply, and a 3.3→5 V level shifter is recommended.
-- Open hardware questions (spec §22) include the exact MPU variant (MPU6500 has no magnetometer, so detect it at runtime), whether the OLED is at 0x3C or 0x3D, whether the SPS30 is on UART or I2C, and the WS2812B form factor and LED count.
+- I2C devices confirmed in Phase 2 (`c` serial command): OLED `0x3C`, LTR-390 `0x53`, **MPU6500** `0x68` (WHO_AM_I 0x70, so no magnetometer: no compass/µT values; keep runtime WHO_AM_I detection), BME680 `0x77`. The bus is error-free at both 100 and 400 kHz (`t` command) and stays at 100 kHz for now.
+- Still open (spec §22): whether the SPS30 is on UART or I2C, and the WS2812B form factor and LED count.
 
 ## Code layout
 

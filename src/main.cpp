@@ -1,11 +1,13 @@
 // ESP32 R201 -- Pametna meteo stanica
 // Faza 1: osnovni test ploče (identifikacija čipa, serijska veza, restart, watchdog)
+// Faza 2: I2C magistrala i skeniranje
 
 #include <Arduino.h>
 #include <esp_task_wdt.h>
 
 #include "config.h"
 #include "diagnostics.h"
+#include "i2c_bus.h"
 #include "log.h"
 #include "pins.h"
 
@@ -41,6 +43,8 @@ static void printHelp() {
     Serial.println("Komande (poslati jedan znak preko serijskog porta):");
     Serial.println("  i -- podaci o uređaju");
     Serial.println("  s -- trenutni status");
+    Serial.println("  c -- I2C skeniranje");
+    Serial.println("  t -- test pouzdanosti I2C magistrale (100 i 400 kHz)");
     Serial.println("  r -- softverski restart");
     Serial.println("  w -- test watchdog-a (glavna petlja se namerno blokira)");
     Serial.println("  h -- pomoć");
@@ -53,6 +57,8 @@ static void handleSerial() {
         switch (c) {
             case 'i': diagnostics::printChipInfo(); break;
             case 's': diagnostics::printStatus(); break;
+            case 'c': i2c_bus::printScan(); break;
+            case 't': i2c_bus::stressTest(2000); break;
             case 'h': printHelp(); break;
             case 'r':
                 LOG_W(TAG, "Softverski restart na zahtev korisnika");
@@ -81,6 +87,8 @@ void setup() {
     diagnostics::begin();
     diagnostics::printChipInfo();
     setupWatchdog();
+    i2c_bus::begin(I2C_FREQUENCY_HZ);
+    i2c_bus::printScan();
     printHelp();
 }
 
