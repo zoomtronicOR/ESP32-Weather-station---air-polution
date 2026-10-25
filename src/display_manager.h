@@ -35,4 +35,7 @@ void showConnection(uint32_t now);
 
 bool available();
 
+// Primenjuje osvetljenje iz konfiguracije (0–100 %; 0 = ekran isključen)
+void applyBrightness();
+
 }  // namespace display_manager

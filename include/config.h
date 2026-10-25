@@ -3,7 +3,7 @@
 // Osnovni parametri firmware-a
 
 #define DEVICE_NAME       "esp32_r201"
-#define FW_VERSION        "0.2.0"
+#define FW_VERSION        "0.3.0"
 
 #define SERIAL_BAUD       115200
 
@@ -37,14 +37,32 @@
 #define AQ_HYSTERESIS_MS    60000   // novi nivo mora da traje 60 s
 #define AQ_STALE_MS         60000   // bez PM merenja duže od ovoga nivo je nepoznat
 
-// OLED (specifikacija §10)
+// OLED 0,96" 128×64 dvobojni (specifikacija §10)
 #define OLED_SPLASH_MS      1500    // uvodni ekran
 #define OLED_BOOT_CONN_MS   10000   // podaci za konekciju posle pokretanja
 #define OLED_CONN_REPEAT_MS 5000    // ponovni prikaz posle promene veze ili tastera BOOT
-#define OLED_PAGE_MS        3000    // trajanje jedne stranice u rotaciji (9 stranica)
+#define OLED_PAGE_MS        3000    // trajanje jedne stranice u rotaciji (6 stranica po 3 reda)
 #define OLED_REFRESH_MS     1000    // osvežavanje sadržaja
 #define OLED_SHIFT_MS       120000  // pomeranje sadržaja za 1 piksel (zaštita od burn-in)
 #define OLED_RETRY_MS       30000   // ponovni pokušaj ako ekran ne odgovara
+
+// Vreme (specifikacija §12.9)
+#define TIME_STALE_MS       (24UL * 3600UL * 1000UL)  // sinhronizacija starija od 24 h
+#define TIME_SYNC_WARN_MS   (15UL * 60UL * 1000UL)    // upozorenje ako nema sinhronizacije 15 min
+
+// Wi-Fi (specifikacija §7)
+#define WIFI_AP_SSID            "METEO-ESP32-SETUP"
+#define WIFI_CONNECT_TIMEOUT_MS 20000   // jedan pokušaj povezivanja
+#define WIFI_MAX_ATTEMPTS       3       // posle ovoliko neuspeha pokreće se portal
+#define WIFI_BACKOFF_MIN_MS     5000    // ponovno povezivanje: 5 s, 10 s, 20 s ...
+#define WIFI_BACKOFF_MAX_MS     300000  // ... najviše 5 min
+#define WIFI_PORTAL_TIMEOUT_MS  300000  // portal se gasi posle 5 min ako postoji sačuvana mreža
+#define WIFI_PORTAL_BUTTON_MS   5000    // dug pritisak tastera BOOT ručno pokreće portal
+
+// Web server i pristup (specifikacija §14)
+#define WEB_ADMIN_USER          "admin"
+#define AUTH_MAX_FAILURES       5       // neuspešnih prijava pre privremenog zaključavanja
+#define AUTH_LOCKOUT_MS         300000  // zaključavanje 5 min
 
 // BME680 grejač gasnog senzora
 #define BME680_HEATER_TEMP_C  320

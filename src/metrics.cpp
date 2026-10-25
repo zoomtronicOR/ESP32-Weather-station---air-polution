@@ -5,22 +5,22 @@
 namespace metrics {
 
 static const MetricDef DEFS[] = {
-    // key                     naziv                       jedinica  dec  min     max       maxAge  izvor
-    {"temperature",            "Temperatura",              "°C",     1,  -40.0f,  85.0f,    20000, "bme680"},
-    {"humidity",               "Relativna vlažnost",       "%",      1,    0.0f,  100.0f,   20000, "bme680"},
-    {"pressure",               "Atmosferski pritisak",     "hPa",    1,  300.0f,  1100.0f,  20000, "bme680"},
-    {"gas_resistance",         "Gasni otpor",              "Ω",      0,    1.0f,  1.0e8f,   30000, "bme680"},
-    {"pm1_0",                  "PM1.0",                    "µg/m³",  1,    0.0f,  1000.0f,  20000, "sps30"},
-    {"pm2_5",                  "PM2.5",                    "µg/m³",  1,    0.0f,  1000.0f,  20000, "sps30"},
-    {"pm4",                    "PM4",                      "µg/m³",  1,    0.0f,  1000.0f,  20000, "sps30"},
-    {"pm10",                   "PM10",                     "µg/m³",  1,    0.0f,  1000.0f,  20000, "sps30"},
-    {"typical_particle_size",  "Tipična veličina čestica", "µm",     2,    0.0f,  10.0f,    20000, "sps30"},
-    {"uv_index",               "UV indeks",                "",       1,    0.0f,  20.0f,    20000, "ltr390"},
-    {"illuminance",            "Osvetljenost",             "lx",     0,    0.0f,  200000.0f,20000, "ltr390"},
-    {"pitch",                  "Nagib (pitch)",            "°",      1,  -90.0f,  90.0f,    2000,  "mpu"},
-    {"roll",                   "Nagib (roll)",             "°",      1, -180.0f,  180.0f,   2000,  "mpu"},
-    {"motion",                 "Pomeranje",                "",       0,    0.0f,  1.0f,     2000,  "mpu"},
-    {"air_quality_level",      "Kvalitet vazduha (EAQI)",  "",       0,    1.0f,  6.0f,     20000, "eaqi"},
+    // key                     apiKey                      naziv                       jedinica  dec  min     max       maxAge  izvor
+    {"temperature", "temperature_c",                        "Temperatura",              "°C",     1,  -40.0f,  85.0f,    20000, "bme680"},
+    {"humidity", "humidity_pct",                            "Relativna vlažnost",       "%",      1,    0.0f,  100.0f,   20000, "bme680"},
+    {"pressure", "pressure_hpa",                            "Atmosferski pritisak",     "hPa",    1,  300.0f,  1100.0f,  20000, "bme680"},
+    {"gas_resistance", "gas_resistance_ohm",                "Gasni otpor",              "Ω",      0,    1.0f,  1.0e8f,   30000, "bme680"},
+    {"pm1_0", "pm1_0_ugm3",                                 "PM1.0",                    "µg/m³",  1,    0.0f,  1000.0f,  20000, "sps30"},
+    {"pm2_5", "pm2_5_ugm3",                                 "PM2.5",                    "µg/m³",  1,    0.0f,  1000.0f,  20000, "sps30"},
+    {"pm4", "pm4_ugm3",                                     "PM4",                      "µg/m³",  1,    0.0f,  1000.0f,  20000, "sps30"},
+    {"pm10", "pm10_ugm3",                                   "PM10",                     "µg/m³",  1,    0.0f,  1000.0f,  20000, "sps30"},
+    {"typical_particle_size", "typical_particle_size_um",   "Tipična veličina čestica", "µm",     2,    0.0f,  10.0f,    20000, "sps30"},
+    {"uv_index", "uv_index",                                "UV indeks",                "",       1,    0.0f,  20.0f,    20000, "ltr390"},
+    {"illuminance", "illuminance_lux",                      "Osvetljenost",             "lx",     0,    0.0f,  200000.0f,20000, "ltr390"},
+    {"pitch", "pitch_deg",                                  "Nagib (pitch)",            "°",      1,  -90.0f,  90.0f,    2000,  "mpu"},
+    {"roll", "roll_deg",                                    "Nagib (roll)",             "°",      1, -180.0f,  180.0f,   2000,  "mpu"},
+    {"motion", "motion",                                    "Pomeranje",                "",       0,    0.0f,  1.0f,     2000,  "mpu"},
+    {"air_quality_level", "air_quality_level",              "Kvalitet vazduha (EAQI)",  "",       0,    1.0f,  6.0f,     20000, "eaqi"},
 };
 
 static_assert(sizeof(DEFS) / sizeof(DEFS[0]) == (size_t)MetricId::Count, "DEFS mora pratiti MetricId");

@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="sr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Meteo stanica</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">⛅</span>
+      <span>Meteo stanica</span>
+    </div>
+    <div class="clock" id="clock" title="">
+      <span class="dot" id="time-dot"></span>
+      <span id="clock-text">--:--</span>
+    </div>
+    <div class="top-actions">
+      <button class="icon-btn" id="theme-btn" title="Promeni temu" aria-label="Promeni temu">◐</button>
+      <button class="icon-btn" id="auth-btn" title="Prijava" aria-label="Prijava">🔒</button>
+      <button class="icon-btn menu-btn" id="menu-btn" aria-label="Meni">☰</button>
+    </div>
+  </header>
+
+  <div class="layout">
+    <nav class="sidebar" id="sidebar">
+      <a href="#dashboard" data-page="dashboard">Kontrolna tabla</a>
+      <a href="#istorija" data-page="istorija">Istorija</a>
+      <a href="#statistika" data-page="statistika">Statistika</a>
+      <a href="#senzori" data-page="senzori">Senzori</a>
+      <a href="#mqtt" data-page="mqtt">MQTT</a>
+      <a href="#wifi" data-page="wifi">Wi-Fi</a>
+      <a href="#podesavanja" data-page="podesavanja">Podešavanja</a>
+      <a href="#alarmi" data-page="alarmi">Alarmiranje</a>
+      <a href="#sistem" data-page="sistem">Sistem</a>
+      <a href="#o-uredjaju" data-page="o-uredjaju">O uređaju</a>
+    </nav>
+    <main id="main">
+      <p class="muted">Učitavanje…</p>
+    </main>
+  </div>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <dialog id="login-dialog">
+    <form method="dialog" id="login-form">
+      <h3>Administratorska prijava</h3>
+      <p class="muted small">Korisnik: <b>admin</b>. Dok lozinka nije promenjena, važi lozinka pristupne tačke prikazana na OLED-u u režimu podešavanja.</p>
+      <label>Lozinka
+        <input type="password" id="login-pass" autocomplete="current-password" required>
+      </label>
+      <p class="error small" id="login-error"></p>
+      <div class="row-end">
+        <button type="button" class="btn ghost" id="login-cancel">Otkaži</button>
+        <button type="submit" class="btn">Prijava</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="app.js"></script>
+</body>
+</html>

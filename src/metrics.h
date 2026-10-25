@@ -24,7 +24,8 @@ enum class MetricId : uint8_t {
 };
 
 struct MetricDef {
-    const char *key;     // ključ za MQTT/JSON
+    const char *key;     // ključ za MQTT topic i JSON paket
+    const char *apiKey;  // ključ u REST API-ju, sa jedinicom (specifikacija §13)
     const char *name;    // naziv na srpskom
     const char *unit;
     uint8_t decimals;

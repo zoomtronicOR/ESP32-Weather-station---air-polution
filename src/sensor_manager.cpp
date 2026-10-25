@@ -61,6 +61,10 @@ void poll(uint32_t now) {
     }
 }
 
+size_t count() { return DRIVER_COUNT; }
+
+const SensorDriver *driver(size_t index) { return index < DRIVER_COUNT ? s_drivers[index] : nullptr; }
+
 Health health() {
     Health h = {0, 0, 0, 0};
     for (size_t i = 0; i < DRIVER_COUNT; i++) {
