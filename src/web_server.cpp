@@ -108,19 +108,21 @@ static void sendOk(AsyncWebServerRequest *req, const char *message) {
     sendJson(req, doc);
 }
 
-static void setRounded(JsonVariant dst, float value, uint8_t decimals) {
+// Vrednost zaokružena na zadati broj decimala; ključ se zadaje posebno, jer MemberProxy
+// pretvoren u JsonVariant za još nepostojeći ključ ne pravi novi član
+static void setRounded(JsonObject obj, const char *key, float value, uint8_t decimals) {
     char buf[24];
     snprintf(buf, sizeof(buf), "%.*f", decimals, value);
-    dst.set(serialized(String(buf)));
+    obj[key] = serialized(String(buf));
 }
 
-static void setTimestamp(JsonVariant dst, uint32_t uptimeMs) {
+static void setTimestamp(JsonObject obj, const char *key, uint32_t uptimeMs) {
     if (time_manager::isValid()) {
         char buf[24];
         time_manager::formatIsoUtc(time_manager::epochFromUptime(uptimeMs), buf, sizeof(buf));
-        dst.set(buf);
+        obj[key] = buf;
     } else {
-        dst.set(nullptr);
+        obj[key] = nullptr;
     }
 }
 
@@ -264,7 +266,7 @@ static void handleReadings(AsyncWebServerRequest *req) {
         m["decimals"] = d.decimals;
         m["source"] = d.source;
         if (fresh) {
-            setRounded(m["value"], r.value, d.decimals);
+            setRounded(m, "value", r.value, d.decimals);
             m["state"] = "ok";
         } else {
             m["value"] = nullptr;
@@ -274,13 +276,13 @@ static void handleReadings(AsyncWebServerRequest *req) {
         }
         if (r.everUpdated) {
             m["age_s"] = (now - r.timestampMs) / 1000;
-            setTimestamp(m["timestamp"], r.timestampMs);
+            setTimestamp(m, "timestamp", r.timestampMs);
         }
 
         // Grupisano po senzoru, ključevi sa jedinicom (specifikacija §13)
         JsonObject g = grouped[d.source].is<JsonObject>() ? grouped[d.source].as<JsonObject>()
                                                           : grouped[d.source].to<JsonObject>();
-        if (fresh) setRounded(g[d.apiKey], r.value, d.decimals);
+        if (fresh) setRounded(g, d.apiKey, r.value, d.decimals);
         else g[d.apiKey] = nullptr;
         g["valid"] = (g["valid"].isNull() ? true : g["valid"].as<bool>()) && fresh;
     }
@@ -293,7 +295,7 @@ static void handleReadings(AsyncWebServerRequest *req) {
     aq["local_estimate"] = true;
     if (lvl > 0) {
         aq["dominant"] = metrics::def(air_quality::dominant()).key;
-        setRounded(aq["dominant_avg_10min"], air_quality::dominantAverage(), 1);
+        setRounded(aq, "dominant_avg_10min", air_quality::dominantAverage(), 1);
     }
     sendJson(req, doc);
 }
@@ -325,7 +327,7 @@ static void addBusSensor(JsonArray list, const SensorDriver *d, uint32_t now) {
     s["error_count"] = d->errorCount();
     if (d->lastOkMs() > 0) {
         s["last_reading_age_s"] = (now - d->lastOkMs()) / 1000;
-        setTimestamp(s["last_reading_utc"], d->lastOkMs());
+        setTimestamp(s, "last_reading_utc", d->lastOkMs());
     }
     if (d->lastError() != ErrorCode::None) s["last_error"] = errorCodeText(d->lastError());
 }
@@ -342,7 +344,7 @@ static void handleSensors(AsyncWebServerRequest *req) {
     JsonArray per = doc["peripherals"].to<JsonArray>();
     JsonObject oled = per.add<JsonObject>();
     oled["id"] = "oled";
-    oled["name"] = "OLED SSD1306 128×32";
+    oled["name"] = "OLED SSD1306 128×64 (dvobojni)";
     oled["interface"] = "I2C0";
     JsonArray op = oled["pins"].to<JsonArray>();
     addPin(op, "SDA", PIN_I2C_SDA);
