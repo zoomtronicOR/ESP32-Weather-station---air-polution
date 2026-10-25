@@ -21,3 +21,31 @@
 
 // WS2812B LED indikator kvaliteta vazduha (RMT)
 #define PIN_WS2812B       27
+
+// ---- Rezervisano za opcione komponente (specifikacija §2.4, §3.4) ----
+
+// AS3935 detektor munja
+#define PIN_AS3935_IRQ    34   // samo ulaz
+#define PIN_AS3935_CS     13   // samo ako se koristi SPI
+
+// Anemometar i kišomer (PCNT, spoljni pull-up 10 kΩ)
+#define PIN_ANEMOMETER    26
+#define PIN_RAIN_GAUGE    25
+
+// Analogni ulazi -- samo ADC1, jer ADC2 ne radi uz Wi-Fi
+#define PIN_WIND_VANE     36   // SVP
+#define PIN_RAIN_SENSOR   39   // SVN
+#define PIN_RAIN_SENSOR_PWR 32
+
+// MH-Z19B preko UART1
+#define PIN_MHZ19_RX      35   // samo ulaz
+#define PIN_MHZ19_TX      33
+
+// microSD (VSPI)
+#define PIN_SD_SCK        18
+#define PIN_SD_MISO       19
+#define PIN_SD_MOSI       23
+#define PIN_SD_CS         5
+
+// Buzzer (preko tranzistora)
+#define PIN_BUZZER        4
