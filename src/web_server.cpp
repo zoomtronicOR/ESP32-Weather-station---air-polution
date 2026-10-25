@@ -41,6 +41,7 @@ enum Action : uint32_t {
     ACT_RESTART = 1 << 5,
     ACT_DISPLAY = 1 << 6,
     ACT_MQTT_RESTART = 1 << 7,
+    ACT_FACTORY_RESET = 1 << 8,
 };
 
 static SemaphoreHandle_t s_mutex = nullptr;
@@ -85,6 +86,12 @@ void update(uint32_t now) {
     if (actions & ACT_MQTT_RESTART) mqtt_manager::restart();
     if (actions & ACT_WIFI_RECONNECT) wifi_manager::reconnect(now);
     if (actions & ACT_PORTAL) wifi_manager::startPortal(now);
+    if (actions & ACT_FACTORY_RESET) {
+        // Briše Wi-Fi mrežu, lozinke, MQTT i ostala podešavanja; posle restarta se pokreće portal
+        LOG_W(TAG, "Vraćanje na fabrička podešavanja na zahtev iz web interfejsa");
+        config_manager::resetToDefaults();
+        s_restartAtMs = now + 1500;
+    }
     if (actions & ACT_RESTART) s_restartAtMs = now + 1000;  // odgovor stigne do pregledača pre restarta
 }
 
@@ -825,6 +832,11 @@ void begin() {
     });
     s_server.on("/api/v1/system/restart", HTTP_POST, [](AsyncWebServerRequest *req) {
         handleAction(req, ACT_RESTART, "Uređaj se restartuje.");
+    });
+    // Fabrička podešavanja: samo iz web interfejsa (ne preko MQTT-a), uz administratorsku lozinku
+    s_server.on("/api/v1/system/factory-reset", HTTP_POST, [](AsyncWebServerRequest *req) {
+        handleAction(req, ACT_FACTORY_RESET,
+                     "Podešavanja su obrisana. Uređaj se restartuje i pokreće konfiguracioni portal METEO-ESP32-SETUP.");
     });
 
     s_server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html").setCacheControl("no-cache");

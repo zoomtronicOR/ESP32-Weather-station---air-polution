@@ -24,6 +24,9 @@ static volatile bool s_connected = false;
 static volatile bool s_connectedEvent = false;
 static volatile bool s_haOnlineEvent = false;
 static volatile int s_lastErrorCode = 0;
+static volatile bool s_restartCommand = false;
+static uint32_t s_restartAtMs = 0;
+static char s_restartTopic[96];
 
 static char s_uri[96];
 static char s_lwtTopic[80];
@@ -31,11 +34,11 @@ static char s_haStatusTopic[48];
 static char s_errorText[64] = "";
 
 static uint32_t s_lastPublishMs = 0;
-static uint32_t s_lastForceMs = 0;
 static uint32_t s_publishCount = 0;
 static uint32_t s_connectCount = 0;
 static float s_lastSent[(size_t)MetricId::Count];
 static bool s_sentValid[(size_t)MetricId::Count];
+static uint32_t s_lastSentMs[(size_t)MetricId::Count];
 
 // ---------------------------------------------------------------------------
 // Home Assistant Discovery: opis entiteta po metrici
@@ -132,8 +135,9 @@ static void publishDiscoveryEntity(const char *component, const char *objectId, 
 
 static void publishDiscovery() {
     const DeviceConfig &cfg = config_manager::get();
-    // Merenje koje se ne osveži za 3 intervala HA prikazuje kao nedostupno
-    uint32_t expire = (uint32_t)cfg.mqttIntervalS * 3 + 30;
+    // Merenje koje se ne osveži u ovom roku HA prikazuje kao nedostupno. Nepromenjene vrednosti
+    // se ponovo šalju najkasnije na MQTT_RESEND_MS, pa rok mora biti bar trostruko duži.
+    uint32_t expire = max<uint32_t>((uint32_t)cfg.mqttIntervalS * 3, MQTT_RESEND_MS / 1000 * 3) + 30;
     char stateTopic[128];
 
     for (size_t i = 0; i < (size_t)MetricId::Count; i++) {
@@ -166,6 +170,24 @@ static void publishDiscovery() {
     publishDiscoveryEntity("binary_sensor", "mqtt_connected", "MQTT veza", s_lwtTopic, "connectivity", nullptr,
                            nullptr, nullptr, true, -1, 0, "online", "offline");
 
+    // Dugme za restart uređaja iz Home Assistant-a (bez state_topic-a)
+    char id[40], uniqueId[80], topic[160];
+    deviceId(id, sizeof(id));
+    snprintf(uniqueId, sizeof(uniqueId), "%s_restart", id);
+    snprintf(topic, sizeof(topic), "%s/button/%s/restart/config", cfg.mqttDiscoveryPrefix, id);
+    JsonDocument btn;
+    btn["name"] = "Restart";
+    btn["unique_id"] = uniqueId;
+    btn["command_topic"] = s_restartTopic;
+    btn["payload_press"] = "restart";
+    btn["device_class"] = "restart";
+    btn["entity_category"] = "config";
+    btn["availability_topic"] = s_lwtTopic;
+    addDevice(btn["device"].to<JsonObject>());
+    String payload;
+    serializeJson(btn, payload);
+    publish(topic, payload.c_str(), 1, true);
+
     LOG_I(TAG, "Home Assistant Discovery objavljen (prefiks \"%s\")", cfg.mqttDiscoveryPrefix);
 }
 
@@ -173,7 +195,7 @@ static void publishDiscovery() {
 // Objavljivanje merenja
 // ---------------------------------------------------------------------------
 
-static void publishReadings(uint32_t now, bool force) {
+static void publishReadings(uint32_t now) {
     const DeviceConfig &cfg = config_manager::get();
     char topic[128], value[32];
     int qos = cfg.mqttQos;
@@ -204,11 +226,13 @@ static void publishReadings(uint32_t now, bool force) {
         // Ista vrednost se ne šalje nepotrebno često (specifikacija §8.5)
         float step = d.decimals == 0 ? 1.0f : powf(10.0f, -d.decimals);
         bool changed = !s_sentValid[i] || fabsf(v - s_lastSent[i]) >= step * 0.5f;
-        if (changed || force) {
+        bool resend = now - s_lastSentMs[i] >= MQTT_RESEND_MS;
+        if (changed || resend) {
             snprintf(topic, sizeof(topic), "%s/%s", cfg.mqttBaseTopic, d.key);
             if (publish(topic, value, qos, false)) {
                 s_lastSent[i] = v;
                 s_sentValid[i] = true;
+                s_lastSentMs[i] = now;
             }
         }
     }
@@ -277,6 +301,11 @@ static void onMqttEvent(void *, esp_event_base_t, int32_t eventId, void *eventDa
                 ev->data_len == 6 && strncmp(ev->data, "online", 6) == 0) {
                 s_haOnlineEvent = true;
             }
+            // Komanda za restart (dugme u Home Assistant-u)
+            if (ev->topic_len == (int)strlen(s_restartTopic) && strncmp(ev->topic, s_restartTopic, ev->topic_len) == 0 &&
+                ev->data_len == 7 && strncmp(ev->data, "restart", 7) == 0) {
+                s_restartCommand = true;
+            }
             break;
         case MQTT_EVENT_ERROR:
             if (ev->error_handle->error_type == MQTT_ERROR_TYPE_CONNECTION_REFUSED) {
@@ -305,6 +334,7 @@ static void startClient() {
     snprintf(s_uri, sizeof(s_uri), "mqtt://%s:%u", cfg.mqttHost, cfg.mqttPort);
     snprintf(s_lwtTopic, sizeof(s_lwtTopic), "%s/availability", cfg.mqttBaseTopic);
     snprintf(s_haStatusTopic, sizeof(s_haStatusTopic), "%s/status", cfg.mqttDiscoveryPrefix);
+    snprintf(s_restartTopic, sizeof(s_restartTopic), "%s/cmd/restart", cfg.mqttBaseTopic);
 
     esp_mqtt_client_config_t mc = {};
     mc.broker.address.uri = s_uri;
@@ -366,11 +396,24 @@ void update(uint32_t now, bool networkUp) {
     }
     if (!s_client) return;
 
+    // Restart na komandu iz Home Assistant-a: prvo se javlja "offline", pa restart posle 1 s
+    if (s_restartCommand) {
+        s_restartCommand = false;
+        LOG_W(TAG, "Restart na zahtev iz Home Assistant-a (MQTT)");
+        publish(s_lwtTopic, "offline", 1, true);
+        s_restartAtMs = now + 1000;
+    }
+    if (s_restartAtMs != 0 && (int32_t)(now - s_restartAtMs) >= 0) {
+        delay(100);
+        ESP.restart();
+    }
+
     if (s_connectedEvent) {
         s_connectedEvent = false;
         s_connectCount++;
         LOG_I(TAG, "Povezan na broker %s", s_uri);
         publish(s_lwtTopic, "online", 1, true);
+        esp_mqtt_client_subscribe(s_client, s_restartTopic, 1);
         if (cfg.mqttDiscovery) {
             esp_mqtt_client_subscribe(s_client, s_haStatusTopic, 0);
             publishDiscovery();
@@ -396,9 +439,7 @@ void update(uint32_t now, bool networkUp) {
     else snprintf(s_errorText, sizeof(s_errorText), "broker odbija vezu (kod %d)", err - 100);
 
     if (s_connected && (s_lastPublishMs == 0 || now - s_lastPublishMs >= (uint32_t)cfg.mqttIntervalS * 1000)) {
-        bool force = now - s_lastForceMs >= MQTT_FORCE_MS;
-        if (force) s_lastForceMs = now;
-        publishReadings(now, force);
+        publishReadings(now);
     }
 }
 

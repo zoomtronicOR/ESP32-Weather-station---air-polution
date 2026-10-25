@@ -61,7 +61,8 @@
 
 // MQTT (specifikacija §8.5)
 #define MQTT_RECONNECT_MS       10000   // pauza između pokušaja povezivanja na broker
-#define MQTT_FORCE_MS           300000  // nepromenjene vrednosti se ponovo šalju najkasnije na 5 min
+#define MQTT_RESEND_MS          60000   // nepromenjene vrednosti se ponovo šalju najkasnije na 60 s
+                                        // (HA expire_after je bar 3 × ovaj rok)
 
 // Web server i pristup (specifikacija §14)
 #define WEB_ADMIN_USER          "admin"

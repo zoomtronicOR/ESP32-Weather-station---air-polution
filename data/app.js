@@ -731,7 +731,21 @@ async function pageSystem(main) {
     <div class="panel"><h3>Akcije</h3><div class="actions">
       <button class="btn ghost" id="portal-btn">Pokreni konfiguracioni portal</button>
       <button class="btn danger" id="restart-btn">Restartuj uređaj</button>
-    </div></div>`;
+    </div></div>
+    <div class="panel"><h3>Fabrička podešavanja</h3>
+      <p class="small">Briše sačuvanu Wi-Fi mrežu, administratorsku lozinku i lozinku pristupne tačke, MQTT, NTP i podešavanja prikaza.
+        Posle restarta uređaj pokreće konfiguracioni portal <b>METEO-ESP32-SETUP</b>; lozinka pristupne tačke je prikazana na OLED-u.
+        Koristiti npr. kada se stanica prenosi u drugu Wi-Fi mrežu.</p>
+      <div class="actions"><button class="btn danger" id="factory-btn">Vrati fabrička podešavanja</button></div>
+    </div>`;
+  $('#factory-btn').onclick = async () => {
+    if (!confirm('Obrisati SVA podešavanja (Wi-Fi, lozinke, MQTT, NTP, prikaz) i restartovati uređaj?')) return;
+    if (!confirm('Da li ste sigurni? Uređaj će izaći iz ove Wi-Fi mreže i pokrenuti portal za podešavanje.')) return;
+    try {
+      banner((await adminApi('/system/factory-reset')).message);
+      setStoredAuth(null);
+    } catch (e) { banner(e.message, true); }
+  };
   $('#restart-btn').onclick = async () => {
     if (!confirm('Restartovati uređaj?')) return;
     try { banner((await adminApi('/system/restart')).message); } catch (e) { banner(e.message, true); }
