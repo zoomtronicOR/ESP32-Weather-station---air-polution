@@ -20,6 +20,7 @@ static const MetricDef DEFS[] = {
     {"pitch",                  "Nagib (pitch)",            "°",      1,  -90.0f,  90.0f,    2000,  "mpu"},
     {"roll",                   "Nagib (roll)",             "°",      1, -180.0f,  180.0f,   2000,  "mpu"},
     {"motion",                 "Pomeranje",                "",       0,    0.0f,  1.0f,     2000,  "mpu"},
+    {"air_quality_level",      "Kvalitet vazduha (EAQI)",  "",       0,    1.0f,  6.0f,     20000, "eaqi"},
 };
 
 static_assert(sizeof(DEFS) / sizeof(DEFS[0]) == (size_t)MetricId::Count, "DEFS mora pratiti MetricId");

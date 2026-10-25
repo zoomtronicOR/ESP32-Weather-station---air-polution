@@ -32,6 +32,20 @@
 #define SPS30_INTERVAL_MS   5000
 #define SPS30_WARMUP_MS     30000  // posle pokretanja ventilatora merenje još nije pouzdano
 
+// Kvalitet vazduha (EAQI, specifikacija §10A.1)
+#define AQ_WINDOW_MS        600000  // klizni prosek 10 min
+#define AQ_HYSTERESIS_MS    60000   // novi nivo mora da traje 60 s
+#define AQ_STALE_MS         60000   // bez PM merenja duže od ovoga nivo je nepoznat
+
+// OLED (specifikacija §10)
+#define OLED_SPLASH_MS      1500    // uvodni ekran
+#define OLED_BOOT_CONN_MS   10000   // podaci za konekciju posle pokretanja
+#define OLED_CONN_REPEAT_MS 5000    // ponovni prikaz posle promene veze ili tastera BOOT
+#define OLED_PAGE_MS        4000    // trajanje jedne stranice u rotaciji
+#define OLED_REFRESH_MS     1000    // osvežavanje sadržaja
+#define OLED_SHIFT_MS       120000  // pomeranje sadržaja za 1 piksel (zaštita od burn-in)
+#define OLED_RETRY_MS       30000   // ponovni pokušaj ako ekran ne odgovara
+
 // BME680 grejač gasnog senzora
 #define BME680_HEATER_TEMP_C  320
 #define BME680_HEATER_MS      150

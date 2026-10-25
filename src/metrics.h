@@ -19,6 +19,7 @@ enum class MetricId : uint8_t {
     Pitch,
     Roll,
     Motion,
+    AirQualityLevel,
     Count
 };
 

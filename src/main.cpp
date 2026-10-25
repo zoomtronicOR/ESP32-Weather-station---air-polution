@@ -8,7 +8,10 @@
 #include "diagnostics.h"
 #include "i2c_bus.h"
 #include "log.h"
+#include "air_quality.h"
+#include "display_manager.h"
 #include "metrics.h"
+#include "pins.h"
 #include "sensor_manager.h"
 #include "status_led.h"
 
@@ -16,6 +19,20 @@ static const char *TAG = "main";
 
 static uint32_t s_lastStatusMs = 0;
 static uint32_t s_lastMetricsPrintMs = 0;
+static bool s_bootButtonDown = false;
+static uint32_t s_bootButtonChangeMs = 0;
+
+// Kratak pritisak tastera BOOT (GPIO0) ponovo prikazuje podatke za konekciju na OLED-u
+static void handleBootButton(uint32_t now) {
+    bool down = digitalRead(PIN_BOOT_BUTTON) == LOW;
+    if (down != s_bootButtonDown && now - s_bootButtonChangeMs >= 50) {
+        s_bootButtonDown = down;
+        s_bootButtonChangeMs = now;
+        if (down) {
+            display_manager::showConnection(now);
+        }
+    }
+}
 
 // Izbor obrasca statusne LED diode; važniji problem ima prednost (specifikacija §16.1)
 static void updateStatusLed(uint32_t now) {
@@ -113,7 +130,9 @@ void setup() {
     setupWatchdog();
     i2c_bus::begin();
     i2c_bus::printScan();
+    display_manager::begin(millis());  // uvodni ekran, pa podaci za konekciju
     sensor_manager::begin();
+    pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
     printHelp();
 }
 
@@ -123,6 +142,9 @@ void loop() {
     uint32_t now = millis();
 
     sensor_manager::poll(now);
+    air_quality::update(now);
+    display_manager::update(now);
+    handleBootButton(now);
     updateStatusLed(now);
 
     if (now - s_lastStatusMs >= STATUS_INTERVAL_MS) {
