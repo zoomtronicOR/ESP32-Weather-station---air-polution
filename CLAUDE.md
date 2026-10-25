@@ -25,7 +25,7 @@ pio test -f test_<name>          # run one on-device test suite (test/test_<name
 
 `pio device monitor` is interactive. To capture serial output non-interactively, open COM7 with pyserial from PlatformIO's Python (`~/.platformio/penv/Scripts/python.exe`). Set `dtr=False, rts=False` before `open()`, and pulse RTS to reset the board. The firmware prints Serbian (UTF-8) text, so call `sys.stdout.reconfigure(encoding='utf-8')`, or Windows' cp1252 console will crash on `č/ć/š`.
 
-The firmware accepts single-character serial commands: `i` (chip info), `s` (status), `c` (I2C scan with chip-ID identification), `t` (I2C reliability test at 100/400 kHz), `r` (restart), `w` (deliberately hang the loop to test the watchdog), `h` (help).
+The firmware accepts single-character serial commands: `i` (chip info), `s` (status), `m` (all metrics), `n` (sensor status), `c` (I2C scan with chip-ID identification), `t` (I2C reliability test at 100/400 kHz), `r` (restart), `w` (deliberately hang the loop to test the watchdog), `h` (help).
 
 ## Language
 
@@ -49,6 +49,10 @@ The project language and all user-facing text (web UI, OLED, log messages, docs,
 - `include/config.h` holds firmware constants (`FW_VERSION`, intervals, watchdog timeout).
 - `include/log.h` provides the `LOG_E/W/I/D(tag, fmt, ...)` macros (levels ERROR/WARN/INFO/DEBUG, gated by `LOG_LEVEL`). Use these instead of raw `Serial.print`.
 - Modules are `src/<module>.cpp/.h` pairs with a namespace-scoped API, e.g. `diagnostics::begin()`. `main.cpp` only wires modules together and runs the non-blocking loop.
+- **Data flow:** `sensor_manager` owns the driver instances (`src/sensors/*_sensor.cpp`, all subclasses of `SensorDriver` in `src/sensor_driver.h`). It calls `begin()`, retries missing or failed sensors every `SENSOR_RETRY_MS`, and calls `poll(now)` each loop. Drivers are non-blocking state machines that push values into `metrics::update(MetricId, value, now)`. `metrics` validates the range and timestamps each value. Consumers (serial `m`, later OLED/web/MQTT) read the registry via `metrics::get`/`isFresh`. Never read the sensors directly. Adding a metric means adding a `MetricId` entry **and** a matching row in `DEFS` in `metrics.cpp` (a `static_assert` checks the count).
+- Drivers call `markOk(now)`/`markError(code)`. `SENSOR_MAX_ERRORS` consecutive errors move a driver to `Error`, invalidate its metrics and trigger re-init. SPS30 reports `Initializing` and invalidates its metrics with `Warmup` for the first `SPS30_WARMUP_MS`.
+- `i2c_bus::begin()` brings up both buses (`Wire` main, `Wire1` SPS30) and records whether external pull-ups were detected (`pullupsOk`). Adafruit libraries call `Wire.begin()` again internally. The resulting "Bus already started" warnings are harmless.
+- The onboard LED blink code (spec §16.1) is chosen in `updateStatusLed()` in `main.cpp` by priority: critical (5 Hz) → sensor/wiring fault (2 flashes) → warm-up (1 Hz) → OK (1 flash / 2 s). Wi-Fi (3 flashes), MQTT (4) and portal (long flash) patterns already exist in `status_led` for later phases.
 - The loop task is subscribed to the task watchdog (8 s, panic on timeout). Every new blocking path must keep calling `esp_task_wdt_reset()` or, better, never block.
 
 ## Architecture (as specified)

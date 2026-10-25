@@ -1,6 +1,5 @@
 // ESP32 R201 -- Pametna meteo stanica
-// Faza 1: osnovni test ploče (identifikacija čipa, serijska veza, restart, watchdog)
-// Faza 2: I2C magistrala i skeniranje
+// Osnovni firmware: dijagnostika, watchdog, I2C magistrale i modularno prikupljanje merenja
 
 #include <Arduino.h>
 #include <esp_task_wdt.h>
@@ -9,13 +8,35 @@
 #include "diagnostics.h"
 #include "i2c_bus.h"
 #include "log.h"
-#include "pins.h"
+#include "metrics.h"
+#include "sensor_manager.h"
+#include "status_led.h"
 
 static const char *TAG = "main";
 
 static uint32_t s_lastStatusMs = 0;
-static uint32_t s_lastBlinkMs = 0;
-static bool s_ledOn = false;
+static uint32_t s_lastMetricsPrintMs = 0;
+
+// Izbor obrasca statusne LED diode; važniji problem ima prednost (specifikacija §16.1)
+static void updateStatusLed(uint32_t now) {
+    using status_led::Pattern;
+    sensor_manager::Health h = sensor_manager::health();
+
+    Pattern pattern;
+    bool noSensorWorks = h.total > 0 && h.ok == 0 && h.initializing == 0;
+    if (!i2c_bus::ready(Wire) || noSensorWorks || ESP.getFreeHeap() < LOW_HEAP_BYTES) {
+        pattern = Pattern::Critical;
+    } else if (h.faulty > 0 || !i2c_bus::pullupsOk(Wire) || !i2c_bus::pullupsOk(Wire1)) {
+        pattern = Pattern::SensorFault;
+    } else if (h.initializing > 0) {
+        pattern = Pattern::Warmup;
+    } else {
+        pattern = Pattern::Heartbeat;
+    }
+
+    status_led::set(pattern);
+    status_led::update(now);
+}
 
 static void setupWatchdog() {
     esp_task_wdt_config_t cfg = {
@@ -43,7 +64,9 @@ static void printHelp() {
     Serial.println("Komande (poslati jedan znak preko serijskog porta):");
     Serial.println("  i -- podaci o uređaju");
     Serial.println("  s -- trenutni status");
-    Serial.println("  c -- I2C skeniranje");
+    Serial.println("  m -- trenutna merenja");
+    Serial.println("  n -- status senzora");
+    Serial.println("  c -- I2C skeniranje (obe magistrale)");
     Serial.println("  t -- test pouzdanosti I2C magistrale (100 i 400 kHz)");
     Serial.println("  r -- softverski restart");
     Serial.println("  w -- test watchdog-a (glavna petlja se namerno blokira)");
@@ -57,6 +80,8 @@ static void handleSerial() {
         switch (c) {
             case 'i': diagnostics::printChipInfo(); break;
             case 's': diagnostics::printStatus(); break;
+            case 'm': metrics::printAll(millis()); break;
+            case 'n': sensor_manager::printStatus(millis()); break;
             case 'c': i2c_bus::printScan(); break;
             case 't': i2c_bus::stressTest(2000); break;
             case 'h': printHelp(); break;
@@ -80,15 +105,15 @@ void setup() {
     Serial.begin(SERIAL_BAUD);
     delay(200);
 
-    pinMode(PIN_STATUS_LED, OUTPUT);
-    digitalWrite(PIN_STATUS_LED, LOW);
+    status_led::begin();  // stalno upaljena dok traje pokretanje
 
-    LOG_I(TAG, "ESP32 meteo stanica, firmware %s -- Faza 1", FW_VERSION);
+    LOG_I(TAG, "ESP32 meteo stanica, firmware %s", FW_VERSION);
     diagnostics::begin();
     diagnostics::printChipInfo();
     setupWatchdog();
-    i2c_bus::begin(I2C_FREQUENCY_HZ);
+    i2c_bus::begin();
     i2c_bus::printScan();
+    sensor_manager::begin();
     printHelp();
 }
 
@@ -97,16 +122,17 @@ void loop() {
 
     uint32_t now = millis();
 
-    // Heartbeat: ugrađena LED dioda trepće jednom u sekundi
-    if (now - s_lastBlinkMs >= 500) {
-        s_lastBlinkMs = now;
-        s_ledOn = !s_ledOn;
-        digitalWrite(PIN_STATUS_LED, s_ledOn ? HIGH : LOW);
-    }
+    sensor_manager::poll(now);
+    updateStatusLed(now);
 
     if (now - s_lastStatusMs >= STATUS_INTERVAL_MS) {
         s_lastStatusMs = now;
         diagnostics::printStatus();
+    }
+
+    if (now - s_lastMetricsPrintMs >= METRICS_PRINT_MS) {
+        s_lastMetricsPrintMs = now;
+        metrics::printAll(now);
     }
 
     handleSerial();

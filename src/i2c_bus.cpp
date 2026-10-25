@@ -1,8 +1,8 @@
 #include "i2c_bus.h"
 
-#include <Wire.h>
 #include <esp_task_wdt.h>
 
+#include "config.h"
 #include "log.h"
 #include "pins.h"
 
@@ -10,58 +10,83 @@ namespace i2c_bus {
 
 static const char *TAG = "i2c";
 
-static bool s_ready = false;
+static bool s_ready[2] = {false, false};
+static bool s_pullupsOk[2] = {false, false};
 
-static bool checkIdleLines() {
+static uint8_t busIndex(TwoWire &wire) { return &wire == &Wire1 ? 1 : 0; }
+
+static bool checkIdleLines(int sda, int scl, const char *busName) {
     // Pre inicijalizacije obe linije moraju biti na visokom nivou (pull-up otpornici)
-    pinMode(PIN_I2C_SDA, INPUT);
-    pinMode(PIN_I2C_SCL, INPUT);
+    pinMode(sda, INPUT);
+    pinMode(scl, INPUT);
     delay(2);
-    bool sda = digitalRead(PIN_I2C_SDA);
-    bool scl = digitalRead(PIN_I2C_SCL);
-    if (!sda || !scl) {
-        LOG_E(TAG, "Linija %s%s%s je na niskom nivou -- nema pull-up otpornika ili postoji kratak spoj",
-              !sda ? "SDA" : "", (!sda && !scl) ? " i " : "", !scl ? "SCL" : "");
+    bool sdaHigh = digitalRead(sda);
+    bool sclHigh = digitalRead(scl);
+    if (!sdaHigh || !sclHigh) {
+        const char *lines = (!sdaHigh && !sclHigh) ? "linije SDA i SCL su" : (!sdaHigh ? "linija SDA je" : "linija SCL je");
+        LOG_E(TAG, "%s: %s na niskom nivou -- nema spoljnih pull-up otpornika ili postoji kratak spoj", busName, lines);
         return false;
     }
     return true;
 }
 
-bool begin(uint32_t frequencyHz) {
-    bool linesOk = checkIdleLines();
-    s_ready = Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL, frequencyHz);
-    Wire.setTimeOut(50);
-    if (s_ready) {
-        LOG_I(TAG, "I2C magistrala: SDA GPIO%d, SCL GPIO%d, %lu kHz",
-              PIN_I2C_SDA, PIN_I2C_SCL, (unsigned long)(frequencyHz / 1000));
+static bool beginBus(TwoWire &wire, int sda, int scl, uint32_t frequencyHz, const char *busName) {
+    bool linesOk = checkIdleLines(sda, scl, busName);
+    bool ok = wire.begin(sda, scl, frequencyHz);
+    wire.setTimeOut(50);
+    s_ready[busIndex(wire)] = ok;
+    s_pullupsOk[busIndex(wire)] = linesOk;
+    if (ok) {
+        LOG_I(TAG, "%s: SDA GPIO%d, SCL GPIO%d, %lu kHz", busName, sda, scl, (unsigned long)(frequencyHz / 1000));
     } else {
-        LOG_E(TAG, "Inicijalizacija I2C magistrale nije uspela");
+        LOG_E(TAG, "%s: inicijalizacija nije uspela", busName);
     }
-    return s_ready && linesOk;
+    return ok && linesOk;
 }
 
-bool readRegister(uint8_t address, uint8_t reg, uint8_t &value) {
-    Wire.beginTransmission(address);
-    Wire.write(reg);
-    if (Wire.endTransmission(false) != 0) {
+bool begin() {
+    bool main = beginBus(Wire, PIN_I2C_SDA, PIN_I2C_SCL, I2C_FREQUENCY_HZ, "I2C0 (glavna)");
+    bool sps = beginBus(Wire1, PIN_SPS30_SDA, PIN_SPS30_SCL, I2C1_FREQUENCY_HZ, "I2C1 (SPS30)");
+    return main && sps;
+}
+
+bool ready(TwoWire &wire) { return s_ready[busIndex(wire)]; }
+
+bool pullupsOk(TwoWire &wire) { return s_pullupsOk[busIndex(wire)]; }
+
+bool probe(TwoWire &wire, uint8_t address) {
+    if (!ready(wire)) return false;
+    wire.beginTransmission(address);
+    return wire.endTransmission() == 0;
+}
+
+bool readRegister(TwoWire &wire, uint8_t address, uint8_t reg, uint8_t &value) {
+    wire.beginTransmission(address);
+    wire.write(reg);
+    if (wire.endTransmission(false) != 0) {
         return false;
     }
-    if (Wire.requestFrom(address, (uint8_t)1) != 1) {
+    if (wire.requestFrom(address, (uint8_t)1) != 1) {
         return false;
     }
-    value = Wire.read();
+    value = wire.read();
     return true;
 }
 
-static void identify(Device &dev) {
+static void identify(TwoWire &wire, Device &dev) {
     uint8_t id = 0;
     dev.identified = false;
+
+    if (busIndex(wire) == 1) {
+        dev.name = dev.address == 0x69 ? "SPS30" : "nepoznat uređaj";
+        return;
+    }
 
     switch (dev.address) {
         case 0x76:
         case 0x77:
             // Bosch: registar chip_id 0xD0
-            if (readRegister(dev.address, 0xD0, id)) {
+            if (readRegister(wire, dev.address, 0xD0, id)) {
                 dev.identified = true;
                 if (id == 0x61)      dev.name = "BME680";
                 else if (id == 0x60) dev.name = "BME280";
@@ -69,37 +94,32 @@ static void identify(Device &dev) {
                 else if (id == 0x50) dev.name = "BMP388";
                 else { dev.name = "Bosch senzor (nepoznat chip_id)"; dev.identified = false; }
             } else {
-                dev.name = "BME680 / BME280 / BMP280 (?)";
+                dev.name = "BME680 (?)";
             }
             break;
 
         case 0x68:
         case 0x69:
             // InvenSense MPU: registar WHO_AM_I 0x75
-            if (readRegister(dev.address, 0x75, id)) {
+            if (readRegister(wire, dev.address, 0x75, id)) {
                 dev.identified = true;
                 if (id == 0x71)      dev.name = "MPU9250";
                 else if (id == 0x73) dev.name = "MPU9255";
                 else if (id == 0x70) dev.name = "MPU6500";
                 else if (id == 0x68) dev.name = "MPU6050 / MPU9150";
-                else if (id == 0x74) dev.name = "MPU6515";
-                else if (id == 0x75) dev.name = "MPU9250 klon (WHO_AM_I 0x75)";
-                else { dev.name = "MPU / DS3231 (nepoznat WHO_AM_I)"; dev.identified = false; }
+                else { dev.name = "nepoznat (WHO_AM_I)"; dev.identified = false; }
             } else {
-                dev.name = "MPU / DS3231 (?)";
-            }
-            if (dev.identified) {
-                LOG_D(TAG, "0x%02X WHO_AM_I = 0x%02X", dev.address, id);
+                dev.name = "MPU (?)";
             }
             break;
 
         case 0x53:
             // LTR-390: registar PART_ID 0x06, gornja 4 bita = 0xB
-            if (readRegister(dev.address, 0x06, id) && (id >> 4) == 0x0B) {
+            if (readRegister(wire, dev.address, 0x06, id) && (id >> 4) == 0x0B) {
                 dev.name = "LTR-390";
                 dev.identified = true;
             } else {
-                dev.name = "LTR-390 / ENS160 (?)";
+                dev.name = "LTR-390 (?)";
             }
             break;
 
@@ -108,33 +128,60 @@ static void identify(Device &dev) {
         case 0x0C: dev.name = "AK8963 magnetometar (MPU9250)"; break;
         case 0x38: dev.name = "AHT20 / AHT21 / AHT25"; break;
         case 0x44:
-        case 0x45: dev.name = "SHT3x / SHT4x"; break;
-        case 0x52: dev.name = "ENS160"; break;
+        case 0x45: dev.name = "SHT4x"; break;
+        case 0x59: dev.name = "SGP40 / SGP41"; break;
         case 0x62: dev.name = "SCD40 / SCD41"; break;
-        case 0x29: dev.name = "TSL2591 / VL53L0X"; break;
         case 0x10: dev.name = "VEML7700"; break;
+        case 0x23: dev.name = "BH1750"; break;
         case 0x01:
         case 0x02:
         case 0x03: dev.name = "AS3935"; break;
-        case 0x70: dev.name = "TCA9548A multiplekser"; break;
-        default:   dev.name = "nepoznat uređaj"; break;
+        default:
+            dev.name = (dev.address >= 0x40 && dev.address <= 0x4F) ? "INA219 / INA226" : "nepoznat uređaj";
+            break;
     }
 }
 
-uint8_t scan(Device *out, uint8_t maxDevices) {
-    if (!s_ready) {
+uint8_t scan(TwoWire &wire, Device *out, uint8_t maxDevices) {
+    if (!ready(wire)) {
         return 0;
     }
     uint8_t count = 0;
     for (uint8_t addr = 0x01; addr <= 0x77; addr++) {
-        Wire.beginTransmission(addr);
-        if (Wire.endTransmission() == 0 && count < maxDevices) {
+        wire.beginTransmission(addr);
+        if (wire.endTransmission() == 0 && count < maxDevices) {
             out[count].address = addr;
-            identify(out[count]);
+            identify(wire, out[count]);
             count++;
         }
     }
     return count;
+}
+
+static void printBus(TwoWire &wire, const char *busName) {
+    Device devices[MAX_DEVICES];
+    uint8_t count = scan(wire, devices, MAX_DEVICES);
+
+    Serial.printf("%s:\n", busName);
+    if (!ready(wire)) {
+        Serial.println("  magistrala nije inicijalizovana");
+    } else if (count == 0) {
+        Serial.println("  nije pronađen nijedan uređaj -- proveriti SDA/SCL, napajanje i GND");
+    } else {
+        for (uint8_t i = 0; i < count; i++) {
+            Serial.printf("  0x%02X  %-34s %s\n", devices[i].address, devices[i].name,
+                          devices[i].identified ? "(potvrđeno ID registrom)" : "");
+        }
+    }
+}
+
+void printScan() {
+    Serial.println();
+    Serial.println("================ I2C skeniranje ==================");
+    printBus(Wire, "I2C0 (glavna magistrala)");
+    printBus(Wire1, "I2C1 (SPS30)");
+    Serial.println("==================================================");
+    Serial.println();
 }
 
 static void stressAt(const Device *devices, uint8_t count, uint32_t frequencyHz, uint16_t iterations) {
@@ -160,39 +207,18 @@ static void stressAt(const Device *devices, uint8_t count, uint32_t frequencyHz,
 
 void stressTest(uint16_t iterations) {
     Device devices[MAX_DEVICES];
-    uint8_t count = scan(devices, MAX_DEVICES);
+    uint8_t count = scan(Wire, devices, MAX_DEVICES);
     Serial.println();
-    Serial.println("============ Test pouzdanosti I2C magistrale ============");
+    Serial.println("======== Test pouzdanosti glavne I2C magistrale ========");
     if (count == 0) {
         Serial.println("Nema uređaja za test.");
     } else {
         stressAt(devices, count, 100000, iterations);
         stressAt(devices, count, 400000, iterations);
-        Wire.setClock(100000);
-        Serial.println("Frekvencija vraćena na 100 kHz.");
+        Wire.setClock(I2C_FREQUENCY_HZ);
+        Serial.printf("Frekvencija vraćena na %lu kHz.\n", (unsigned long)(I2C_FREQUENCY_HZ / 1000));
     }
     Serial.println("=========================================================");
-    Serial.println();
-}
-
-void printScan() {
-    Device devices[MAX_DEVICES];
-    uint8_t count = scan(devices, MAX_DEVICES);
-
-    Serial.println();
-    Serial.println("================ I2C skeniranje ==================");
-    if (!s_ready) {
-        Serial.println("I2C magistrala nije inicijalizovana.");
-    } else if (count == 0) {
-        Serial.println("Nije pronađen nijedan uređaj. Proveriti SDA/SCL, napajanje i GND.");
-    } else {
-        for (uint8_t i = 0; i < count; i++) {
-            Serial.printf("  0x%02X  %-34s %s\n", devices[i].address, devices[i].name,
-                          devices[i].identified ? "(potvrđeno ID registrom)" : "");
-        }
-        Serial.printf("Ukupno uređaja: %u\n", count);
-    }
-    Serial.println("==================================================");
     Serial.println();
 }
 

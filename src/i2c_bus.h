@@ -1,8 +1,10 @@
 #pragma once
 
 #include <Arduino.h>
+#include <Wire.h>
 
-// Zajednička I2C magistrala: inicijalizacija, skeniranje i prepoznavanje čipova
+// I2C magistrale: glavna (Wire: BME680, MPU, LTR-390, OLED) i I2C1 (Wire1: SPS30)
+// Inicijalizacija, provera pull-up otpornika, skeniranje i prepoznavanje čipova
 
 namespace i2c_bus {
 
@@ -14,15 +16,20 @@ struct Device {
     bool identified;    // true ako je čip potvrđen čitanjem ID registra
 };
 
-bool begin(uint32_t frequencyHz = 100000);
+// Inicijalizuje obe magistrale
+bool begin();
+
+bool ready(TwoWire &wire);
+// Rezultat provere spoljnih pull-up otpornika pri inicijalizaciji
+bool pullupsOk(TwoWire &wire);
+bool probe(TwoWire &wire, uint8_t address);
+bool readRegister(TwoWire &wire, uint8_t address, uint8_t reg, uint8_t &value);
 
 // Skenira magistralu; vraća broj pronađenih uređaja
-uint8_t scan(Device *out, uint8_t maxDevices);
+uint8_t scan(TwoWire &wire, Device *out, uint8_t maxDevices);
 void printScan();
 
-bool readRegister(uint8_t address, uint8_t reg, uint8_t &value);
-
-// Test pouzdanosti: ponovljeno čitanje svih pronađenih uređaja na 100 i 400 kHz
+// Test pouzdanosti glavne magistrale na 100 i 400 kHz
 void stressTest(uint16_t iterations);
 
 }  // namespace i2c_bus
