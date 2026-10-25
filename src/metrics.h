@@ -33,6 +33,7 @@ struct MetricDef {
     float maxValid;
     uint32_t maxAgeMs;   // starije očitavanje se smatra zastarelim
     const char *source;  // id senzora
+    float trendDelta;    // promena manja od ovoga smatra se stabilnom (statistika, trend)
 };
 
 namespace metrics {

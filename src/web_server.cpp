@@ -12,6 +12,7 @@
 #include "config_manager.h"
 #include "diagnostics.h"
 #include "display_manager.h"
+#include "history_api.h"
 #include "i2c_bus.h"
 #include "log.h"
 #include "metrics.h"
@@ -19,6 +20,7 @@
 #include "pins.h"
 #include "sensor_manager.h"
 #include "status_led.h"
+#include "storage_manager.h"
 #include "time_manager.h"
 #include "wifi_manager.h"
 
@@ -43,6 +45,7 @@ enum Action : uint32_t {
     ACT_MQTT_RESTART = 1 << 7,
     ACT_FACTORY_RESET = 1 << 8,
     ACT_MQTT_CLEAR = 1 << 9,
+    ACT_HISTORY_CLEAR = 1 << 10,
 };
 
 static SemaphoreHandle_t s_mutex = nullptr;
@@ -112,6 +115,7 @@ void update(uint32_t now) {
         else wifi_manager::reconnect(now);
     }
     if (actions & ACT_PORTAL) wifi_manager::startPortal(now);
+    if (actions & ACT_HISTORY_CLEAR) storage_manager::clear();
     if (actions & ACT_FACTORY_RESET) {
         LOG_W(TAG, "Vraćanje na fabrička podešavanja na zahtev iz web interfejsa");
         bool sent = removeFromHa && mqtt_manager::removeFromHomeAssistant();
@@ -591,6 +595,10 @@ static void handleSystem(AsyncWebServerRequest *req) {
     doc["ota_partition_bytes"] = ESP.getFreeSketchSpace();
     doc["fs_total"] = LittleFS.totalBytes();
     doc["fs_used"] = LittleFS.usedBytes();
+    doc["history_5min"] = storage_manager::count(storage_manager::Resolution::Min5);
+    doc["history_5min_capacity"] = storage_manager::capacity(storage_manager::Resolution::Min5);
+    doc["history_hour"] = storage_manager::count(storage_manager::Resolution::Hour);
+    doc["history_hour_capacity"] = storage_manager::capacity(storage_manager::Resolution::Hour);
     doc["mac"] = WiFi.macAddress();
     if (wifi_manager::connected()) doc["rssi"] = WiFi.RSSI();
     doc["time_status"] = time_manager::statusKey(time_manager::status());
@@ -628,7 +636,7 @@ static void handleWifiPost(AsyncWebServerRequest *req, JsonVariant &json) {
 
     const char *ssid = json["ssid"] | "";
     size_t ssidLen = strlen(ssid);
-    if (ssidLen == 0 || ssidLen > 32) return sendError(req, 400, "Naziv mreže (SSID) mora imati 1--32 znaka.");
+    if (ssidLen == 0 || ssidLen > 32) return sendError(req, 400, "Naziv mreže (SSID) mora imati 1-32 znaka.");
     const char *pass = json["password"] | (const char *)nullptr;
     if (pass && strlen(pass) > 64) return sendError(req, 400, "Lozinka mreže može imati najviše 64 znaka.");
     if (pass && strlen(pass) > 0 && strlen(pass) < 8) return sendError(req, 400, "Lozinka mreže mora imati bar 8 znakova.");
@@ -645,7 +653,7 @@ static void handleWifiPost(AsyncWebServerRequest *req, JsonVariant &json) {
     }
     const char *admin = json["admin_password"] | (const char *)nullptr;
     if (admin && strlen(admin) > 0 && (strlen(admin) < 8 || strlen(admin) > 64)) {
-        return sendError(req, 400, "Administratorska lozinka mora imati 8--64 znaka.");
+        return sendError(req, 400, "Administratorska lozinka mora imati 8-64 znaka.");
     }
 
     if (!lock()) return sendError(req, 503, "Uređaj je zauzet, pokušajte ponovo.");
@@ -698,7 +706,7 @@ static void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
     bool timeChanged = false, wifiChanged = false, displayChanged = false;
     if (json["oled_brightness"].is<int>()) {
         int v = json["oled_brightness"];
-        if (v < 0 || v > 100) return sendError(req, 400, "Osvetljenje ekrana mora biti 0--100 %.");
+        if (v < 0 || v > 100) return sendError(req, 400, "Osvetljenje ekrana mora biti 0-100 %.");
         cfg.oledBrightness = v;
         displayChanged = true;
     }
@@ -718,7 +726,7 @@ static void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
     }
     if (json["ntp_interval_min"].is<int>()) {
         int v = json["ntp_interval_min"];
-        if (v < 15 || v > 1440) return sendError(req, 400, "Interval sinhronizacije mora biti 15--1440 min.");
+        if (v < 15 || v > 1440) return sendError(req, 400, "Interval sinhronizacije mora biti 15-1440 min.");
         cfg.ntpIntervalMin = v;
         timeChanged = true;
     }
@@ -736,12 +744,12 @@ static void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
     }
     const char *admin = json["admin_password"] | (const char *)nullptr;
     if (admin) {
-        if (strlen(admin) < 8 || strlen(admin) > 64) return sendError(req, 400, "Administratorska lozinka mora imati 8--64 znaka.");
+        if (strlen(admin) < 8 || strlen(admin) > 64) return sendError(req, 400, "Administratorska lozinka mora imati 8-64 znaka.");
         strlcpy(cfg.adminPass, admin, sizeof(cfg.adminPass));
     }
     const char *ap = json["ap_password"] | (const char *)nullptr;
     if (ap) {
-        if (strlen(ap) < 8 || strlen(ap) > 63) return sendError(req, 400, "Lozinka pristupne tačke mora imati 8--63 znaka.");
+        if (strlen(ap) < 8 || strlen(ap) > 63) return sendError(req, 400, "Lozinka pristupne tačke mora imati 8-63 znaka.");
         strlcpy(cfg.apPass, ap, sizeof(cfg.apPass));
     }
 
@@ -771,7 +779,7 @@ static void handleMqttPost(AsyncWebServerRequest *req, JsonVariant &json) {
     }
     if (json["port"].is<int>()) {
         int port = json["port"];
-        if (port < 1 || port > 65535) return sendError(req, 400, "Port mora biti 1--65535.");
+        if (port < 1 || port > 65535) return sendError(req, 400, "Port mora biti 1-65535.");
         cfg.mqttPort = port;
     }
     const char *user = json["username"] | (const char *)nullptr;
@@ -786,7 +794,7 @@ static void handleMqttPost(AsyncWebServerRequest *req, JsonVariant &json) {
     }
     const char *cid = json["client_id"] | (const char *)nullptr;
     if (cid) {
-        if (strlen(cid) == 0 || strlen(cid) > 32) return sendError(req, 400, "Client ID mora imati 1--32 znaka.");
+        if (strlen(cid) == 0 || strlen(cid) > 32) return sendError(req, 400, "Client ID mora imati 1-32 znaka.");
         strlcpy(cfg.mqttClientId, cid, sizeof(cfg.mqttClientId));
     }
     const char *base = json["base_topic"] | (const char *)nullptr;
@@ -796,7 +804,7 @@ static void handleMqttPost(AsyncWebServerRequest *req, JsonVariant &json) {
     }
     if (json["interval_s"].is<int>()) {
         int v = json["interval_s"];
-        if (v < 5 || v > 300) return sendError(req, 400, "Interval objavljivanja mora biti 5--300 s.");
+        if (v < 5 || v > 300) return sendError(req, 400, "Interval objavljivanja mora biti 5-300 s.");
         cfg.mqttIntervalS = v;
     }
     if (json["qos"].is<int>()) {
@@ -866,6 +874,10 @@ void begin() {
         handleAction(req, ACT_PORTAL, "Konfiguracioni portal je pokrenut.");
     });
     s_server.on("/api/v1/mqtt/clear", HTTP_POST, handleMqttClear);
+    s_server.on("/api/v1/history/clear", HTTP_POST, [](AsyncWebServerRequest *req) {
+        handleAction(req, ACT_HISTORY_CLEAR, "Istorija je obrisana.");
+    });
+    history_api::registerRoutes(s_server);
     s_server.on("/api/v1/system/restart", HTTP_POST, [](AsyncWebServerRequest *req) {
         handleAction(req, ACT_RESTART, "Uređaj se restartuje.");
     });

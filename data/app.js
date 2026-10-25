@@ -1,4 +1,4 @@
-// Meteo stanica -- web interfejs (bez spoljnih biblioteka, radi i bez interneta)
+// Meteo stanica - web interfejs (bez spoljnih biblioteka, radi i bez interneta)
 'use strict';
 
 const DAYS = ['nedelja', 'ponedeljak', 'utorak', 'sreda', 'četvrtak', 'petak', 'subota'];
@@ -28,7 +28,7 @@ function esc(v) {
 }
 
 function ago(seconds) {
-  if (seconds == null) return '--';
+  if (seconds == null) return '-';
   if (seconds < 60) return `pre ${seconds} s`;
   if (seconds < 3600) return `pre ${Math.floor(seconds / 60)} min`;
   if (seconds < 86400) return `pre ${Math.floor(seconds / 3600)} h`;
@@ -220,7 +220,7 @@ function cardHtml(m) {
 }
 
 // ---------------------------------------------------------------------------
-// Instrumenti (gauge) -- specifikacija §6.2
+// Instrumenti (gauge) - specifikacija §6.2
 // Zone boja samo prema zvaničnim skalama: PM2.5/PM10 i nivo prema EAQI, UV indeks prema WHO.
 // Ostali instrumenti su neutralni (bez izmišljenih pragova).
 // ---------------------------------------------------------------------------
@@ -313,7 +313,7 @@ function gaugeHtml(m) {
   const g = GAUGES[m.key];
   const ok = m.state === 'ok';
   const raw = ok ? Number(m.value) : null;
-  const shown = ok ? (g.scale ? (raw * g.scale).toFixed(g.decimals) : m.value) : '--';
+  const shown = ok ? (g.scale ? (raw * g.scale).toFixed(g.decimals) : m.value) : '-';
   let zones = '';
   if (g.zones) {
     let from = g.min;
@@ -348,13 +348,36 @@ function eaqiGaugeHtml(aq) {
   // Kazaljka pokazuje sredinu polja nivoa
   const svg = gaugeSvg({
     ok: lvl > 0, zones, label: 'Kvalitet vazduha',
-    shown: lvl ? `${lvl}/6` : '--', unit: lvl ? aq.name : 'nepoznat',
+    shown: lvl ? `${lvl}/6` : '-', unit: lvl ? aq.name : 'nepoznat',
     frac: lvl ? (getNeedles() ? (lvl - 0.5) / 6 : lvl / 6) : 0,
     color: AQ_COLORS[lvl] || 'var(--na)', minLabel: '1', maxLabel: '6',
   });
   return `<div class="card gauge">
     <div class="head"><span>Kvalitet vazduha (EAQI)</span><span class="icon">🍃</span></div>
     ${svg}<div class="foot">${lvl ? 'lokalna procena, klizni prosek 10 min' : 'nema svežih PM merenja'}</div></div>`;
+}
+
+// Wi-Fi signal: orijentacione granice kvaliteta (korisnički pragovi, ne standard)
+const WIFI_ZONES = [[-80, '#e5534b', 'vrlo slab'], [-70, '#F18B00', 'slab'], [-60, '#d4c72c', 'dobar'], [-50, '#2da44e', 'vrlo dobar'], [Infinity, '#1b9aaa', 'odličan']];
+
+function wifiGaugeHtml(w) {
+  const g = { min: -100, max: -30 };
+  const ok = w && w.connected && w.rssi != null;
+  const zone = ok ? WIFI_ZONES.find(([to]) => w.rssi <= to) : null;
+  let zones = '', from = g.min;
+  for (const [to, c] of WIFI_ZONES) {
+    const end = Math.min(to, g.max);
+    zones += `<path d="${arcPath(54, gaugeFrac(from, g), gaugeFrac(end, g))}" stroke="${c}" stroke-width="4" fill="none"/>`;
+    from = end;
+  }
+  const svg = gaugeSvg({
+    ok, zones, label: 'Wi-Fi signal',
+    shown: ok ? String(w.rssi) : '-', unit: ok ? `dBm · ${zone[2]}` : 'dBm',
+    frac: ok ? gaugeFrac(w.rssi, g) : 0, color: ok ? zone[1] : 'var(--na)', minLabel: '-100', maxLabel: '-30',
+  });
+  return `<div class="card gauge state-${ok ? 'ok' : 'unavailable'}">
+    <div class="head"><span>Wi-Fi signal</span><span class="icon">📶</span></div>
+    ${svg}<div class="foot">${ok ? esc(w.ssid) : (w && w.portal ? 'konfiguracioni portal' : 'nije povezan')}</div></div>`;
 }
 
 // Grupe instrumenata na kontrolnoj tabli
@@ -364,6 +387,7 @@ const GAUGE_GROUPS = [
   { title: 'Kvalitet vazduha', keys: ['air_quality_level', 'gas_resistance'] },
   { title: 'Svetlo i UV', keys: ['uv_index', 'illuminance'] },
   { title: 'Položaj', keys: ['pitch', 'roll', 'motion'] },
+  { title: 'Uređaj', keys: ['wifi_rssi'] },
 ];
 
 function getDashView() {
@@ -389,6 +413,7 @@ async function pageDashboard(main) {
     const sections = GAUGE_GROUPS.map((grp) => {
       const items = grp.keys.map((k) => {
         if (k === 'air_quality_level') return eaqiGaugeHtml(r.air_quality);
+        if (k === 'wifi_rssi') return wifiGaugeHtml(s.wifi);
         const m = byKey[k];
         if (!m) return '';
         return GAUGES[k] ? gaugeHtml(m) : cardHtml(m);
@@ -398,8 +423,8 @@ async function pageDashboard(main) {
     main.innerHTML = `<div class="page-head"><h2>Kontrolna tabla</h2>
         <div class="actions"><label class="check small"><input type="checkbox" id="needles" ${getNeedles() ? 'checked' : ''}> Kazaljke</label>${toggle}</div></div>
       ${sections}
-      <p class="muted small">Boje zona: PM2.5, PM10 i nivo kvaliteta vazduha prema EAQI (lokalna procena), UV indeks prema skali WHO.
-        Ostali instrumenti nemaju pragove. Gasni otpor i osvetljenost su na logaritamskoj skali.</p>`;
+      <p class="muted small">Boje zona: PM2.5, PM10 i nivo kvaliteta vazduha prema EAQI (lokalna procena), UV indeks prema skali WHO;
+        Wi-Fi signal prema orijentacionim (korisničkim) granicama. Ostali instrumenti nemaju pragove. Gasni otpor i osvetljenost su na logaritamskoj skali.</p>`;
     bindToggle();
     $('#needles').onchange = (ev) => { setNeedles(ev.target.checked); pageDashboard(main); };
     return;
@@ -441,12 +466,12 @@ async function pageSensors(main) {
   const rows = d.sensors.map((s) => `<tr><td><b>${esc(s.name)}</b><br><span class="muted small">${esc(s.id)}</span></td>
       <td>${esc(s.interface)}</td><td>${pinsText(s.pins)}</td><td>${esc(s.i2c_address)}</td><td>${s.supply_v} V</td>
       <td>${statusBadge(s.status, s.status_text)}</td><td>${s.error_count}</td>
-      <td>${s.last_reading_age_s != null ? ago(s.last_reading_age_s) : '--'}</td></tr>`).join('');
+      <td>${s.last_reading_age_s != null ? ago(s.last_reading_age_s) : '-'}</td></tr>`).join('');
   const per = d.peripherals.map((p) => `<tr><td><b>${esc(p.name)}</b></td><td>${esc(p.interface)}</td><td>${pinsText(p.pins)}</td>
-      <td>${esc(p.i2c_address || '--')}</td><td>${p.supply_v ? p.supply_v + ' V' : '--'}</td><td>${statusBadge(p.status, p.status_text)}</td></tr>`).join('');
+      <td>${esc(p.i2c_address || '-')}</td><td>${p.supply_v ? p.supply_v + ' V' : '-'}</td><td>${statusBadge(p.status, p.status_text)}</td></tr>`).join('');
   const warn = [];
   if (!d.buses.i2c0_pullups_ok) warn.push('Na glavnoj I2C magistrali (GPIO21/22) nisu pronađeni pull-up otpornici.');
-  if (!d.buses.i2c1_pullups_ok) warn.push('Na I2C1 magistrali za SPS30 (GPIO16/17) nisu pronađeni pull-up otpornici -- dodati 4,7–10 kΩ prema 3,3 V.');
+  if (!d.buses.i2c1_pullups_ok) warn.push('Na I2C1 magistrali za SPS30 (GPIO16/17) nisu pronađeni pull-up otpornici - dodati 4,7-10 kΩ prema 3,3 V.');
   main.innerHTML = `<h2>Senzori</h2>
     ${warn.map((w) => `<div class="notice warn">⚠️ ${esc(w)}</div>`).join('')}
     <div class="panel table-wrap"><h3>Senzori</h3><table>
@@ -466,12 +491,12 @@ async function pageWifi(main) {
     ${w.portal_active ? `<div class="notice">Aktivan je konfiguracioni portal (mreža <b>${esc(w.ap_ssid)}</b>). Izaberite mrežu i unesite lozinku.</div>` : ''}
     <div class="panel"><h3>Status</h3><table>
       <tr><td class="k">Stanje</td><td>${esc(modeText)}</td></tr>
-      <tr><td class="k">Mreža (SSID)</td><td>${esc(w.ssid || '--')}</td></tr>
-      <tr><td class="k">IP adresa</td><td>${esc(w.ip || '--')}</td></tr>
-      <tr><td class="k">Gateway / maska</td><td>${esc(w.gateway || '--')} / ${esc(w.subnet || '--')}</td></tr>
-      <tr><td class="k">DNS</td><td>${esc(w.dns || '--')}</td></tr>
-      <tr><td class="k">Signal (RSSI)</td><td>${w.rssi != null ? w.rssi + ' dBm' : '--'}</td></tr>
-      <tr><td class="k">Povezan</td><td>${w.connected_for_s != null ? duration(w.connected_for_s) : '--'}</td></tr>
+      <tr><td class="k">Mreža (SSID)</td><td>${esc(w.ssid || '-')}</td></tr>
+      <tr><td class="k">IP adresa</td><td>${esc(w.ip || '-')}</td></tr>
+      <tr><td class="k">Gateway / maska</td><td>${esc(w.gateway || '-')} / ${esc(w.subnet || '-')}</td></tr>
+      <tr><td class="k">DNS</td><td>${esc(w.dns || '-')}</td></tr>
+      <tr><td class="k">Signal (RSSI)</td><td>${w.rssi != null ? w.rssi + ' dBm' : '-'}</td></tr>
+      <tr><td class="k">Povezan</td><td>${w.connected_for_s != null ? duration(w.connected_for_s) : '-'}</td></tr>
       <tr><td class="k">Naziv uređaja</td><td>${esc(w.hostname)} (<a href="http://${esc(w.hostname)}.local/">${esc(w.hostname)}.local</a>)</td></tr>
       <tr><td class="k">MAC adresa</td><td>${esc(w.mac)}</td></tr>
       <tr><td class="k">Ponovnih povezivanja</td><td>${w.reconnects}</td></tr>
@@ -656,9 +681,9 @@ async function pageMqtt(main) {
   main.innerHTML = `<h2>MQTT</h2>
     <div class="panel"><h3>Status</h3><table>
       <tr><td class="k">Veza</td><td>${conn}</td></tr>
-      <tr><td class="k">Broker</td><td>${q.host ? esc(q.host) + ':' + q.port : '--'}</td></tr>
+      <tr><td class="k">Broker</td><td>${q.host ? esc(q.host) + ':' + q.port : '-'}</td></tr>
       <tr><td class="k">Topic stanja (JSON)</td><td><code>${esc(q.state_topic)}</code></td></tr>
-      <tr><td class="k">Availability (LWT)</td><td><code>${esc(q.availability_topic)}</code> -- online / offline</td></tr>
+      <tr><td class="k">Availability (LWT)</td><td><code>${esc(q.availability_topic)}</code> - online / offline</td></tr>
       <tr><td class="k">Pojedinačni topic-i</td><td><code>${esc(q.base_topic)}/temperature</code>, <code>…/pm2_5</code>, …</td></tr>
       <tr><td class="k">Objava</td><td>${q.publish_count} objava${q.publish_count ? ', poslednja ' + ago(q.last_publish_age_s) : ''} · povezivanja: ${q.connect_count}</td></tr>
       <tr><td class="k">Home Assistant Discovery</td><td>${q.discovery ? `uključen (prefiks <code>${esc(q.discovery_prefix)}</code>)` : 'isključen'}</td></tr>
@@ -674,8 +699,8 @@ async function pageMqtt(main) {
         <label>Client ID<input name="client_id" maxlength="32" value="${esc(q.client_id)}"></label>
         <label>Osnovni topic<input name="base_topic" maxlength="63" value="${esc(q.base_topic)}"></label>
         <label>Interval objavljivanja (s)<input name="interval_s" type="number" min="5" max="300" value="${q.interval_s}"></label>
-        <label>QoS<select name="qos"><option value="0" ${q.qos === 0 ? 'selected' : ''}>0 -- najviše jednom</option>
-          <option value="1" ${q.qos === 1 ? 'selected' : ''}>1 -- najmanje jednom</option></select></label>
+        <label>QoS<select name="qos"><option value="0" ${q.qos === 0 ? 'selected' : ''}>0 - najviše jednom</option>
+          <option value="1" ${q.qos === 1 ? 'selected' : ''}>1 - najmanje jednom</option></select></label>
         <label class="check"><input type="checkbox" name="discovery" ${q.discovery ? 'checked' : ''}> Home Assistant MQTT Discovery</label>
         <label>Discovery prefiks<input name="discovery_prefix" maxlength="31" value="${esc(q.discovery_prefix)}"></label>
         <p class="muted small">TLS veza još nije podržana; koristiti broker u lokalnoj mreži (port 1883).</p>
@@ -726,7 +751,7 @@ async function pageSystem(main) {
       `${bytes(s.fs_used)} / ${bytes(s.fs_total)} · ${Math.round(s.fs_used / s.fs_total * 100)} %`),
   ];
   if (s.rssi != null) {
-    // RSSI -90 dBm (slabo) .. -30 dBm (odlično) preslikano na 0–100 %
+    // RSSI -90 dBm (slabo) .. -30 dBm (odlično) preslikano na 0-100 %
     const q = Math.max(0, Math.min(100, (s.rssi + 90) / 60 * 100));
     bars.push(resourceBar('Jačina Wi-Fi signala', q, `${s.rssi} dBm · ${Math.round(q)} %`, true));
   }
@@ -735,9 +760,12 @@ async function pageSystem(main) {
     <div class="panel"><table>
       <tr><td class="k">Uređaj</td><td>${esc(s.device)}</td></tr>
       <tr><td class="k">Verzija firmware-a</td><td>${esc(s.firmware)}</td></tr>
-      <tr><td class="k">Čip</td><td>${esc(s.chip)} ${esc(s.chip_revision)}, ${s.cores} jezgra, ${s.cpu_mhz} MHz</td></tr>
+      <tr><td class="k">Čip</td><td>${esc(s.chip)} ${esc(s.chip_revision)}, ${s.cores} jezgra, ${s.cpu_mhz} MHz
+        <span class="muted"> - ${s.cpu_mhz > 200 ? 'opa, kao Pentium kec 😊' : 'još samo malo overclocka i možda bude Pentium kec 😊'}</span></td></tr>
       <tr><td class="k">Flash</td><td>${bytes(s.flash_bytes)} · firmware ${bytes(s.sketch_bytes)} od ${bytes(s.ota_partition_bytes)}</td></tr>
       <tr><td class="k">LittleFS</td><td>${bytes(s.fs_used)} / ${bytes(s.fs_total)}</td></tr>
+      <tr><td class="k">Istorija</td><td>${s.history_5min} / ${s.history_5min_capacity} zapisa po 5 min ·
+        ${s.history_hour} / ${s.history_hour_capacity} satnih zapisa</td></tr>
       <tr><td class="k">Slobodna memorija</td><td>${bytes(s.heap_free)} (najmanje ${bytes(s.heap_min_free)}, najveći blok ${bytes(s.heap_max_block)})</td></tr>
       <tr><td class="k">Vreme rada</td><td>${duration(s.uptime_s)}</td></tr>
       <tr><td class="k">Razlog poslednjeg restarta</td><td>${esc(s.reset_reason)}</td></tr>
@@ -777,12 +805,386 @@ async function pageSystem(main) {
 async function pageAbout(main) {
   const s = await api('/system');
   main.innerHTML = `<h2>O uređaju</h2><div class="panel"><table>
-      <tr><td class="k">Projekat</td><td>ESP32 R201 -- pametna meteo stanica</td></tr>
+      <tr><td class="k">Projekat</td><td>ESP32 R201 - pametna meteo stanica</td></tr>
       <tr><td class="k">Ploča</td><td>NodeMCU ESP-32S V1.1 (${esc(s.chip)} ${esc(s.chip_revision)})</td></tr>
       <tr><td class="k">Verzija firmware-a</td><td>${esc(s.firmware)}</td></tr>
       <tr><td class="k">Senzori</td><td>BME680, MPU6500, LTR-390, SPS30</td></tr>
       <tr><td class="k">Prikaz</td><td>OLED 0,96" 128×64 SSD1306, statusna LED</td></tr>
     </table></div>`;
+}
+
+// ---------------------------------------------------------------------------
+// Istorija i grafikoni (specifikacija §6.3) - SVG bez spoljnih biblioteka
+// ---------------------------------------------------------------------------
+
+const CHART_GROUPS = [
+  { title: 'Temperatura i vlažnost', keys: ['temperature', 'humidity'] },
+  { title: 'Atmosferski pritisak', keys: ['pressure'] },
+  { title: 'Čestice PM', keys: ['pm1_0', 'pm2_5', 'pm4', 'pm10'], hidden: ['pm1_0', 'pm4'] },
+  { title: 'UV indeks i osvetljenost', keys: ['uv_index', 'illuminance'] },
+  { title: 'Gasni otpor', keys: ['gas_resistance'] },
+  { title: 'Kvalitet vazduha (EAQI)', keys: ['air_quality_level'] },
+  { title: 'Nagib', keys: ['pitch', 'roll'] },
+];
+const CHART_COLORS = ['#1f6feb', '#e5534b', '#2da44e', '#d4a72c', '#8250df', '#1b9aaa'];
+const HIST_PERIODS = [['1h', '1 sat'], ['6h', '6 sati'], ['24h', '24 sata'], ['7d', '7 dana'], ['30d', '30 dana']];
+
+const hist = {
+  period: (() => { try { return localStorage.getItem('histPeriod') || '24h'; } catch (e) { return '24h'; } })(),
+  band: (() => { try { return localStorage.getItem('histBand') !== '0'; } catch (e) { return true; } })(),
+  hidden: new Set(CHART_GROUPS.flatMap((g) => g.hidden || [])),
+  data: null,
+};
+
+function fmtAxisTime(ts, period) {
+  const p = deviceParts(ts * 1000);
+  return (period === '7d' || period === '30d') ? `${p.day}.${p.month}.` : `${p.hour}:${p.minute}`;
+}
+
+function fmtFullTime(ts) {
+  const p = deviceParts(ts * 1000);
+  return `${DAYS[p.wd]}, ${p.day}.${p.month}.${p.year}. ${p.hour}:${p.minute}`;
+}
+
+function niceNum(v, dec) {
+  return Number(v).toFixed(Math.min(dec, 2));
+}
+
+// Jedan grafikon: do dve ose (po jedinici), linija proseka, opcioni min/max opseg i tooltip
+function drawChart(box, group, data) {
+  const width = Math.max(300, box.clientWidth);
+  const height = 230;
+  const idx = Object.fromEntries(data.metrics.map((m, i) => [m.key, i]));
+  const series = group.keys.filter((k) => idx[k] != null).map((k, si) => {
+    const i = idx[k];
+    const meta = data.metrics[i];
+    return {
+      key: k, name: meta.name, unit: meta.unit, decimals: meta.decimals, color: CHART_COLORS[si % CHART_COLORS.length],
+      pts: data.points.map((p) => ({ t: p[0], avg: p[1 + i * 3], min: p[2 + i * 3], max: p[3 + i * 3] })),
+    };
+  });
+  const visible = series.filter((s) => !hist.hidden.has(s.key));
+  const units = [...new Set(series.map((s) => s.unit))].slice(0, 2);
+  const m = { l: 50, r: units.length > 1 ? 50 : 14, t: 10, b: 26 };
+  const w = width - m.l - m.r, h = height - m.t - m.b;
+  const tMax = data.now, tMin = data.now - { '1h': 3600, '6h': 21600, '24h': 86400, '7d': 604800, '30d': 2592000 }[data.period];
+  const x = (t) => m.l + (t - tMin) / (tMax - tMin) * w;
+
+  const axes = units.map((u) => {
+    let lo = Infinity, hi = -Infinity;
+    visible.filter((s) => s.unit === u).forEach((s) => s.pts.forEach((p) => {
+      if (p.avg == null) return;
+      lo = Math.min(lo, hist.band && p.min != null ? p.min : p.avg);
+      hi = Math.max(hi, hist.band && p.max != null ? p.max : p.avg);
+    }));
+    if (!isFinite(lo)) { lo = 0; hi = 1; }
+    if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
+    const pad = (hi - lo) * 0.08;
+    return { unit: u, lo: lo - pad, hi: hi + pad };
+  });
+  const yOf = (s) => {
+    const a = axes.find((ax) => ax.unit === s.unit) || axes[0];
+    return (v) => m.t + h - (v - a.lo) / (a.hi - a.lo) * h;
+  };
+
+  let svg = `<svg width="${width}" height="${height}" class="chart-svg">`;
+  // Mreža i ose
+  for (let i = 0; i <= 4; i++) {
+    const yy = m.t + h * i / 4;
+    svg += `<line x1="${m.l}" x2="${m.l + w}" y1="${yy}" y2="${yy}" class="grid"/>`;
+    axes.forEach((a, ai) => {
+      const v = a.hi - (a.hi - a.lo) * i / 4;
+      const dec = Math.abs(a.hi - a.lo) < 10 ? 1 : 0;
+      svg += `<text x="${ai === 0 ? m.l - 6 : m.l + w + 6}" y="${yy + 3}" text-anchor="${ai === 0 ? 'end' : 'start'}" class="tick">${v.toFixed(dec)}</text>`;
+    });
+  }
+  axes.forEach((a, ai) => {
+    svg += `<text x="${ai === 0 ? 4 : width - 4}" y="${m.t + 8}" text-anchor="${ai === 0 ? 'start' : 'end'}" class="tick unit">${esc(a.unit)}</text>`;
+  });
+  const ticks = width < 500 ? 4 : 6;
+  for (let i = 0; i <= ticks; i++) {
+    const t = tMin + (tMax - tMin) * i / ticks;
+    svg += `<text x="${x(t)}" y="${height - 6}" text-anchor="${i === 0 ? 'start' : i === ticks ? 'end' : 'middle'}" class="tick">${fmtAxisTime(t, data.period)}</text>`;
+  }
+
+  // Serije: prekid linije gde nedostaju podaci (uređaj isključen ili senzor nedostupan)
+  const gap = data.resolution_s * 2.5;
+  visible.forEach((s) => {
+    const y = yOf(s);
+    let line = '', band = [], bands = [];
+    let prevT = null;
+    s.pts.forEach((p) => {
+      if (p.avg == null || p.t < tMin) { prevT = null; return; }
+      const cx = x(p.t + data.resolution_s / 2);
+      const broken = prevT == null || p.t - prevT > gap;
+      line += `${broken ? 'M' : 'L'}${cx.toFixed(1)} ${y(p.avg).toFixed(1)}`;
+      if (broken && band.length) { bands.push(band); band = []; }
+      if (p.min != null && p.max != null) band.push([cx, y(p.max), y(p.min)]);
+      prevT = p.t;
+    });
+    if (band.length) bands.push(band);
+    if (hist.band) {
+      bands.forEach((b) => {
+        const top = b.map((q) => `${q[0].toFixed(1)},${q[1].toFixed(1)}`).join(' ');
+        const bot = b.slice().reverse().map((q) => `${q[0].toFixed(1)},${q[2].toFixed(1)}`).join(' ');
+        svg += `<polygon points="${top} ${bot}" fill="${s.color}" opacity="0.15"/>`;
+      });
+    }
+    svg += `<path d="${line}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round"/>`;
+  });
+  svg += `<line class="cursor" x1="0" x2="0" y1="${m.t}" y2="${m.t + h}" visibility="hidden"/>`;
+  svg += `<rect class="hover" x="${m.l}" y="${m.t}" width="${w}" height="${h}" fill="transparent"/></svg>`;
+
+  // Legenda (uključivanje/isključivanje serija) i pregled min/max/prosek
+  const legend = series.map((s) => {
+    const vals = s.pts.filter((p) => p.avg != null && p.t >= tMin);
+    let summary = 'nema podataka';
+    if (vals.length) {
+      const lo = Math.min(...vals.map((p) => p.min ?? p.avg)), hi = Math.max(...vals.map((p) => p.max ?? p.avg));
+      const avg = vals.reduce((a, p) => a + p.avg, 0) / vals.length;
+      summary = `min ${niceNum(lo, s.decimals)} · max ${niceNum(hi, s.decimals)} · prosek ${niceNum(avg, s.decimals + 1)} ${esc(s.unit)}`;
+    }
+    return `<button class="legend-item ${hist.hidden.has(s.key) ? 'off' : ''}" data-key="${s.key}">
+      <span class="swatch" style="background:${s.color}"></span>${esc(s.name)}<span class="muted small"> · ${summary}</span></button>`;
+  }).join('');
+
+  box.innerHTML = `${svg}<div class="chart-tip" hidden></div><div class="legend">${legend}</div>`;
+  box.querySelectorAll('.legend-item').forEach((b) => {
+    b.onclick = () => {
+      if (hist.hidden.has(b.dataset.key)) hist.hidden.delete(b.dataset.key); else hist.hidden.add(b.dataset.key);
+      drawChart(box, group, data);
+    };
+  });
+
+  // Tooltip: najbliža tačka po vremenu
+  const hover = box.querySelector('.hover'), cursor = box.querySelector('.cursor'), tip = box.querySelector('.chart-tip');
+  const move = (clientX) => {
+    const rect = box.querySelector('svg').getBoundingClientRect();
+    const px = clientX - rect.left;
+    const t = tMin + (px - m.l) / w * (tMax - tMin);
+    let best = null;
+    data.points.forEach((p) => { if (p[0] >= tMin && (best == null || Math.abs(p[0] - t) < Math.abs(best[0] - t))) best = p; });
+    if (!best) return;
+    const cx = x(best[0] + data.resolution_s / 2);
+    cursor.setAttribute('x1', cx); cursor.setAttribute('x2', cx); cursor.setAttribute('visibility', 'visible');
+    const rows = visible.map((s) => {
+      const i = idx[s.key];
+      const v = best[1 + i * 3];
+      return `<div><span class="swatch" style="background:${s.color}"></span>${esc(s.name)}: <b>${v == null ? '-' : niceNum(v, s.decimals)} ${esc(s.unit)}</b>${v != null && best[2 + i * 3] != null ? ` <span class="muted">(${niceNum(best[2 + i * 3], s.decimals)}-${niceNum(best[3 + i * 3], s.decimals)})</span>` : ''}</div>`;
+    }).join('');
+    tip.innerHTML = `<div class="muted">${fmtFullTime(best[0])}</div>${rows}`;
+    tip.hidden = false;
+    const tipW = tip.offsetWidth;
+    tip.style.left = Math.min(Math.max(cx - tipW / 2, 0), width - tipW) + 'px';
+  };
+  hover.addEventListener('mousemove', (e) => move(e.clientX));
+  hover.addEventListener('touchmove', (e) => { move(e.touches[0].clientX); e.preventDefault(); }, { passive: false });
+  hover.addEventListener('touchstart', (e) => move(e.touches[0].clientX), { passive: true });
+  hover.addEventListener('mouseleave', () => { tip.hidden = true; cursor.setAttribute('visibility', 'hidden'); });
+}
+
+async function loadHistory() {
+  const keys = [...new Set(CHART_GROUPS.flatMap((g) => g.keys))].join(',');
+  hist.data = await api(`/history?period=${hist.period}&metrics=${keys}`);
+}
+
+function renderCharts() {
+  document.querySelectorAll('.chart-box').forEach((box) => {
+    drawChart(box, CHART_GROUPS[Number(box.dataset.group)], hist.data);
+  });
+}
+
+async function pageHistory(main) {
+  const first = !main.querySelector('#charts');
+  if (first) {
+    main.innerHTML = `<div class="page-head"><h2>Istorija</h2>
+        <div class="actions">
+          <label class="check small"><input type="checkbox" id="band" ${hist.band ? 'checked' : ''}> Min/max opseg</label>
+          <div class="seg" id="periods">${HIST_PERIODS.map(([p, label]) => `<button data-p="${p}" class="${p === hist.period ? 'active' : ''}">${label}</button>`).join('')}</div>
+        </div></div>
+      <div id="hist-note"></div>
+      <div id="charts">${CHART_GROUPS.map((g, i) => `<div class="panel"><h3>${esc(g.title)}</h3><div class="chart-box" data-group="${i}"><p class="muted">Učitavanje…</p></div></div>`).join('')}</div>
+      <div class="panel"><h3>Izvoz i brisanje</h3>
+        <p class="small">Izvoz za izabrani period (${esc(HIST_PERIODS.find((p) => p[0] === hist.period)[1])}): proseci, minimumi i maksimumi svih merenja.</p>
+        <div class="actions">
+          <a class="btn ghost" id="exp-csv" href="/api/v1/history/export?format=csv&period=${hist.period}" download>Preuzmi CSV</a>
+          <a class="btn ghost" id="exp-json" href="/api/v1/history/export?format=json&period=${hist.period}" download>Preuzmi JSON</a>
+          <button class="btn danger" id="hist-clear">Obriši istoriju</button>
+        </div></div>`;
+    main.querySelectorAll('#periods button').forEach((b) => {
+      b.onclick = async () => {
+        hist.period = b.dataset.p;
+        try { localStorage.setItem('histPeriod', hist.period); } catch (e) { /* nije dostupno */ }
+        main.innerHTML = '';
+        await pageHistory(main);
+      };
+    });
+    $('#band').onchange = (ev) => {
+      hist.band = ev.target.checked;
+      try { localStorage.setItem('histBand', hist.band ? '1' : '0'); } catch (e) { /* nije dostupno */ }
+      renderCharts();
+    };
+    $('#hist-clear').onclick = async () => {
+      if (!confirm('Obrisati celu lokalnu istoriju merenja? Ova radnja se ne može poništiti.')) return;
+      try { banner((await adminApi('/history/clear')).message); setTimeout(() => pageHistory(main), 1500); } catch (e) { banner(e.message, true); }
+    };
+    if (!state.historyResize) {
+      state.historyResize = true;
+      window.addEventListener('resize', () => { if (state.page === 'istorija' && hist.data) renderCharts(); });
+    }
+  }
+  await loadHistory();
+  const note = $('#hist-note');
+  if (note) {
+    note.innerHTML = hist.data.points.length ? ''
+      : `<div class="notice">Još nema sačuvanih podataka za ovaj period. Prvi 5-minutni zapis nastaje 5 minuta posle pokretanja, a satni posle prvog punog sata.${hist.data.time_valid ? '' : ' Vreme još nije sinhronizovano.'}</div>`;
+  }
+  renderCharts();
+}
+
+// ---------------------------------------------------------------------------
+// Statistika (specifikacija §5.4)
+// ---------------------------------------------------------------------------
+
+const stats = {
+  metric: (() => { try { return localStorage.getItem('statsMetric') || 'temperature'; } catch (e) { return 'temperature'; } })(),
+  data: null,
+  daily: null,
+};
+
+// Zajednički tooltip za grafikone statistike: items = [{x, html}], prikazuje se najbliži po x
+function attachTooltip(box, svgW, items) {
+  const hover = box.querySelector('.hover'), cursor = box.querySelector('.cursor'), tip = box.querySelector('.chart-tip');
+  const move = (clientX) => {
+    const rect = box.querySelector('svg').getBoundingClientRect();
+    const px = clientX - rect.left;
+    let best = null;
+    items.forEach((it) => { if (best == null || Math.abs(it.x - px) < Math.abs(best.x - px)) best = it; });
+    if (!best) return;
+    cursor.setAttribute('x1', best.x); cursor.setAttribute('x2', best.x); cursor.setAttribute('visibility', 'visible');
+    tip.innerHTML = best.html;
+    tip.hidden = false;
+    const tipW = tip.offsetWidth;
+    tip.style.left = Math.min(Math.max(best.x - tipW / 2, 0), svgW - tipW) + 'px';
+  };
+  hover.addEventListener('mousemove', (e) => move(e.clientX));
+  hover.addEventListener('touchmove', (e) => { move(e.touches[0].clientX); e.preventDefault(); }, { passive: false });
+  hover.addEventListener('touchstart', (e) => move(e.touches[0].clientX), { passive: true });
+  hover.addEventListener('mouseleave', () => { tip.hidden = true; cursor.setAttribute('visibility', 'hidden'); });
+}
+
+// Stubići min-max sa tačkom proseka; bars = [{label, sub, min, max, avg, extra}]
+function drawRangeBars(box, bars, meta, color) {
+  const width = Math.max(300, box.clientWidth), height = 220;
+  const m = { l: 50, r: 14, t: 12, b: 30 };
+  const w = width - m.l - m.r, h = height - m.t - m.b;
+  const valid = bars.filter((b) => b.avg != null);
+  if (!valid.length) {
+    box.innerHTML = '<p class="muted">Još nema dovoljno sačuvanih podataka.</p>';
+    return;
+  }
+  let lo = Math.min(...valid.map((b) => b.min)), hi = Math.max(...valid.map((b) => b.max));
+  if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  const y = (v) => m.t + h - (v - lo) / (hi - lo) * h;
+  const step = w / bars.length;
+  const bw = Math.max(3, Math.min(28, step * 0.55));
+  const dec = Math.abs(hi - lo) < 10 ? 1 : 0;
+  let svg = `<svg width="${width}" height="${height}" class="chart-svg">`;
+  for (let i = 0; i <= 4; i++) {
+    const yy = m.t + h * i / 4;
+    svg += `<line x1="${m.l}" x2="${m.l + w}" y1="${yy}" y2="${yy}" class="grid"/>
+      <text x="${m.l - 6}" y="${yy + 3}" text-anchor="end" class="tick">${(hi - (hi - lo) * i / 4).toFixed(dec)}</text>`;
+  }
+  svg += `<text x="4" y="${m.t + 8}" class="tick unit">${esc(meta.unit)}</text>`;
+  const labelEvery = Math.ceil(bars.length / (width < 500 ? 6 : 12));
+  const items = [];
+  bars.forEach((b, i) => {
+    const cx = m.l + step * (i + 0.5);
+    if (i % labelEvery === 0) svg += `<text x="${cx}" y="${height - 8}" text-anchor="middle" class="tick">${esc(b.label)}</text>`;
+    if (b.avg == null) return;
+    svg += `<rect x="${cx - bw / 2}" y="${y(b.max)}" width="${bw}" height="${Math.max(2, y(b.min) - y(b.max))}" rx="3" fill="${color}" opacity="0.35"/>
+      <circle cx="${cx}" cy="${y(b.avg)}" r="${Math.min(5, bw / 2 + 1)}" fill="${color}"/>`;
+    const d = meta.decimals;
+    items.push({ x: cx, html: `<div class="muted">${esc(b.sub || b.label)}</div>
+      <div>prosek <b>${niceNum(b.avg, d + 1)} ${esc(meta.unit)}</b></div>
+      <div>min ${niceNum(b.min, d)} · max ${niceNum(b.max, d)} ${esc(meta.unit)}</div>${b.extra ? `<div class="muted">${b.extra}</div>` : ''}` });
+  });
+  svg += `<line class="cursor" x1="0" x2="0" y1="${m.t}" y2="${m.t + h}" visibility="hidden"/>
+    <rect class="hover" x="${m.l}" y="${m.t}" width="${w}" height="${h}" fill="transparent"/></svg>`;
+  box.innerHTML = `${svg}<div class="chart-tip" hidden></div>`;
+  attachTooltip(box, width, items);
+}
+
+// Dnevni agregati (po lokalnom datumu uređaja) iz satne istorije za 30 dana
+function dailyFromHourly(data) {
+  const days = new Map();
+  data.points.forEach((p) => {
+    if (p[1] == null) return;
+    const d = deviceParts(p[0] * 1000);
+    const key = `${d.year}-${d.month}-${d.day}`;
+    if (!days.has(key)) days.set(key, { label: `${d.day}.${d.month}.`, sub: `${DAYS[d.wd]}, ${d.day}.${d.month}.${d.year}.`, sum: 0, n: 0, min: Infinity, max: -Infinity });
+    const g = days.get(key);
+    g.sum += p[1]; g.n++;
+    g.min = Math.min(g.min, p[2] ?? p[1]);
+    g.max = Math.max(g.max, p[3] ?? p[1]);
+  });
+  return [...days.values()].map((g) => ({ label: g.label, sub: g.sub, min: g.min, max: g.max, avg: g.sum / g.n, extra: `${g.n} satnih zapisa` }));
+}
+
+function renderStatsCharts() {
+  const meta = stats.data.metrics.find((m) => m.key === stats.metric) || stats.data.metrics[0];
+  const pr = [['1h', '1 sat'], ['24h', '24 sata'], ['7d', '7 dana'], ['30d', '30 dana']];
+  const bars = pr.map(([p, label]) => {
+    const o = meta.periods[p];
+    if (!o || !o.samples) return { label, avg: null };
+    const trend = { rising: '↗ rast', falling: '↘ pad', stable: '→ stabilno' }[o.trend] || '';
+    const change = o.change != null ? `promena ${o.change > 0 ? '+' : ''}${o.change} ${esc(meta.unit)}` : '';
+    return { label, sub: `Poslednjih ${label}`, avg: Number(o.avg), min: Number(o.min), max: Number(o.max), extra: [trend, change].filter(Boolean).join(' · ') };
+  });
+  drawRangeBars($('#stats-periods'), bars, meta, CHART_COLORS[0]);
+  if (stats.daily) drawRangeBars($('#stats-daily'), dailyFromHourly(stats.daily), meta, CHART_COLORS[2]);
+  else $('#stats-daily').innerHTML = '<p class="muted">Istorija nije dostupna.</p>';
+}
+
+async function pageStatistics(main) {
+  const s = await api('/statistics');
+  stats.data = s;
+  if (!s.metrics.some((m) => m.key === stats.metric)) stats.metric = s.metrics[0].key;
+  try { stats.daily = await api(`/history?period=30d&metrics=${stats.metric}`); } catch (e) { stats.daily = null; }
+
+  const trendIcon = { rising: '<span title="rast">↗</span>', falling: '<span title="pad">↘</span>', stable: '<span title="stabilno">→</span>' };
+  const periods = [['1h', '1 sat'], ['24h', '24 sata'], ['7d', '7 dana'], ['30d', '30 dana']];
+  const rows = s.metrics.map((m) => {
+    const cells = periods.map(([p]) => {
+      const o = m.periods[p];
+      if (!o || !o.samples) return '<td class="muted">-</td>';
+      const change = o.change != null ? ` <span class="muted small">${o.change > 0 ? '+' : ''}${esc(o.change)}</span>` : '';
+      return `<td><b>${esc(o.avg)}</b> ${o.trend ? trendIcon[o.trend] : ''}${change}<br><span class="muted small">${esc(o.min)} - ${esc(o.max)}</span></td>`;
+    }).join('');
+    return `<tr class="stat-row ${m.key === stats.metric ? 'selected' : ''}" data-key="${m.key}"><td><b>${esc(m.name)}</b><br><span class="muted small">${esc(m.unit)}</span></td>
+      <td>${m.current != null ? `<b>${esc(m.current)}</b>` : '<span class="muted">-</span>'}</td>${cells}</tr>`;
+  }).join('');
+  main.innerHTML = `<div class="page-head"><h2>Statistika</h2>
+      <label class="small">Merenje <select id="stats-metric">${s.metrics.map((m) => `<option value="${m.key}" ${m.key === stats.metric ? 'selected' : ''}>${esc(m.name)}</option>`).join('')}</select></label></div>
+    <div class="notice">${esc(s.note)}</div>
+    <div class="panel"><h3>Poređenje perioda</h3><div class="chart-box" id="stats-periods"></div>
+      <p class="muted small">Stubić: minimum - maksimum; tačka: prosek. Pređite mišem ili dodirnite za vrednosti, trend i promenu.</p></div>
+    <div class="panel"><h3>Dnevni pregled (30 dana)</h3><div class="chart-box" id="stats-daily"></div></div>
+    <div class="panel table-wrap"><h3>Sva merenja</h3>
+      <p class="muted small">Ćelija: <b>prosek</b>, trend (↗ rast, ↘ pad, → stabilno) i promena u odnosu na prethodni isti period; ispod: minimum - maksimum. Klik na red bira merenje za grafikone.</p>
+      <table><tr><th>Merenje</th><th>Trenutno</th>${periods.map(([, l]) => `<th>${l}</th>`).join('')}</tr>${rows}</table></div>
+    <p class="muted small">Sačuvano: ${s.history.records_5min}/${s.history.capacity_5min} zapisa po 5 min,
+      ${s.history.records_hour}/${s.history.capacity_hour} satnih zapisa${s.history.pending ? `, ${s.history.pending} čeka sinhronizaciju vremena` : ''}.</p>`;
+
+  const select = async (key) => {
+    stats.metric = key;
+    try { localStorage.setItem('statsMetric', key); } catch (e) { /* nije dostupno */ }
+    await pageStatistics(main);
+  };
+  $('#stats-metric').onchange = (ev) => select(ev.target.value);
+  main.querySelectorAll('.stat-row').forEach((tr) => { tr.onclick = () => select(tr.dataset.key); });
+  renderStatsCharts();
 }
 
 function pageLater(title) {
@@ -793,8 +1195,8 @@ function pageLater(title) {
 
 const PAGES = {
   dashboard: { render: pageDashboard, refreshMs: 3000 },
-  istorija: { render: pageLater('Istorija') },
-  statistika: { render: pageLater('Statistika') },
+  istorija: { render: pageHistory, refreshMs: 60000 },
+  statistika: { render: pageStatistics, refreshMs: 60000 },
   senzori: { render: pageSensors, refreshMs: 5000 },
   mqtt: { render: pageMqtt },
   wifi: { render: pageWifi },

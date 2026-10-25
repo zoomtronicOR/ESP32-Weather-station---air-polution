@@ -3,7 +3,7 @@
 // Osnovni parametri firmware-a
 
 #define DEVICE_NAME       "esp32_r201"
-#define FW_VERSION        "0.4.0"
+#define FW_VERSION        "0.5.0"
 
 #define SERIAL_BAUD       115200
 
@@ -31,6 +31,11 @@
 #define LTR390_INTERVAL_MS  5000
 #define SPS30_INTERVAL_MS   5000
 #define SPS30_WARMUP_MS     30000  // posle pokretanja ventilatora merenje još nije pouzdano
+
+// Lokalna istorija (specifikacija §9.2)
+#define HISTORY_5MIN_RECORDS   288   // 24 h po 5 min
+#define HISTORY_HOUR_RECORDS   720   // 30 dana po 1 h
+#define HISTORY_PENDING_MAX    12    // 5-min intervala (1 h) koji čekaju pouzdano vreme
 
 // Kvalitet vazduha (EAQI, specifikacija §10A.1)
 #define AQ_WINDOW_MS        600000  // klizni prosek 10 min

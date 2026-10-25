@@ -16,6 +16,7 @@
 #include "pins.h"
 #include "sensor_manager.h"
 #include "status_led.h"
+#include "storage_manager.h"
 #include "time_manager.h"
 #include "web_server.h"
 #include "wifi_manager.h"
@@ -162,6 +163,7 @@ void setup() {
     display_manager::begin(millis());  // uvodni ekran, pa podaci za konekciju
     sensor_manager::begin();
     pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
+    storage_manager::begin();  // LittleFS i fajlovi istorije
     wifi_manager::begin(millis());
     web_server::begin();  // posle Wi-Fi-ja, jer mrežni sloj mora biti pokrenut
     printHelp();
@@ -174,6 +176,7 @@ void loop() {
 
     sensor_manager::poll(now);
     air_quality::update(now);
+    storage_manager::update(now);
 
     wifi_manager::update(now);
     time_manager::update(now, wifi_manager::connected());

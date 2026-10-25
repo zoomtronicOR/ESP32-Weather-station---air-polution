@@ -124,6 +124,26 @@ h3 { margin: 0 0 12px; font-size: 16px; }
 .g-section h3 { color: var(--muted); font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }
 .needle { transition: all .4s; }
 
+.chart-box { position: relative; min-height: 120px; }
+.chart-svg { display: block; touch-action: pan-y; }
+.chart-svg .grid { stroke: var(--border); stroke-width: 1; }
+.chart-svg .tick { font-size: 11px; fill: var(--muted); font-variant-numeric: tabular-nums; }
+.chart-svg .tick.unit { font-weight: 600; }
+.chart-svg .cursor { stroke: var(--muted); stroke-dasharray: 3 3; }
+.chart-tip {
+  position: absolute; top: 4px; pointer-events: none; z-index: 2;
+  background: var(--panel); border: 1px solid var(--border); border-radius: 8px;
+  padding: 6px 10px; font-size: 12px; box-shadow: 0 4px 12px rgba(0, 0, 0, .12); white-space: nowrap;
+}
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin-top: 8px; }
+.legend-item { font: inherit; font-size: 13px; background: none; border: 0; color: var(--text); cursor: pointer; padding: 2px 0; text-align: left; }
+.legend-item.off { opacity: .4; text-decoration: line-through; }
+.swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+a.btn { text-decoration: none; display: inline-block; }
+tr.stat-row { cursor: pointer; }
+tr.stat-row:hover td { background: var(--bg); }
+tr.stat-row.selected td:first-child { box-shadow: inset 3px 0 0 var(--accent); }
+
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; box-shadow: var(--shadow); }
 
 table { width: 100%; border-collapse: collapse; }
