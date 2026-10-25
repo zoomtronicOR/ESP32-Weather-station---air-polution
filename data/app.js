@@ -747,8 +747,10 @@ async function pageSystem(main) {
       `slobodno najmanje ${bytes(s.heap_min_free)}`),
     resourceBar('Firmware (OTA particija)', s.sketch_bytes / s.ota_partition_bytes * 100,
       `${bytes(s.sketch_bytes)} / ${bytes(s.ota_partition_bytes)} · ${Math.round(s.sketch_bytes / s.ota_partition_bytes * 100)} %`),
-    resourceBar('LittleFS (web i istorija)', s.fs_used / s.fs_total * 100,
+    resourceBar('LittleFS (web interfejs)', s.fs_used / s.fs_total * 100,
       `${bytes(s.fs_used)} / ${bytes(s.fs_total)} · ${Math.round(s.fs_used / s.fs_total * 100)} %`),
+    resourceBar('LittleFS (istorija merenja)', s.history_fs_used / s.history_fs_total * 100,
+      `${bytes(s.history_fs_used)} / ${bytes(s.history_fs_total)} · ${Math.round(s.history_fs_used / s.history_fs_total * 100)} %`),
   ];
   if (s.rssi != null) {
     // RSSI -90 dBm (slabo) .. -30 dBm (odlično) preslikano na 0-100 %
@@ -865,10 +867,7 @@ function drawChart(box, group, data) {
   });
   const visible = series.filter((s) => !hist.hidden.has(s.key));
   const units = [...new Set(series.map((s) => s.unit))].slice(0, 2);
-  const m = { l: 50, r: units.length > 1 ? 50 : 14, t: 10, b: 26 };
-  const w = width - m.l - m.r, h = height - m.t - m.b;
   const tMax = data.now, tMin = data.now - { '1h': 3600, '6h': 21600, '24h': 86400, '7d': 604800, '30d': 2592000 }[data.period];
-  const x = (t) => m.l + (t - tMin) / (tMax - tMin) * w;
 
   const axes = units.map((u) => {
     let lo = Infinity, hi = -Infinity;
@@ -880,8 +879,16 @@ function drawChart(box, group, data) {
     if (!isFinite(lo)) { lo = 0; hi = 1; }
     if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
     const pad = (hi - lo) * 0.08;
-    return { unit: u, lo: lo - pad, hi: hi + pad };
+    const a = { unit: u, lo: lo - pad, hi: hi + pad };
+    const dec = Math.abs(a.hi - a.lo) < 10 ? 1 : 0;
+    a.labels = [0, 1, 2, 3, 4].map((i) => (a.hi - (a.hi - a.lo) * i / 4).toFixed(dec));
+    return a;
   });
+  // Margine prema najdužoj oznaci na osi; jedinica stoji u posebnom redu iznad ose
+  const labelWidth = (a) => (a ? Math.max(...a.labels.map((l) => l.length)) * 6.6 + 12 : 0);
+  const m = { l: Math.max(36, labelWidth(axes[0])), r: axes.length > 1 ? Math.max(36, labelWidth(axes[1])) : 14, t: 22, b: 26 };
+  const w = width - m.l - m.r, h = height - m.t - m.b;
+  const x = (t) => m.l + (t - tMin) / (tMax - tMin) * w;
   const yOf = (s) => {
     const a = axes.find((ax) => ax.unit === s.unit) || axes[0];
     return (v) => m.t + h - (v - a.lo) / (a.hi - a.lo) * h;
@@ -893,13 +900,11 @@ function drawChart(box, group, data) {
     const yy = m.t + h * i / 4;
     svg += `<line x1="${m.l}" x2="${m.l + w}" y1="${yy}" y2="${yy}" class="grid"/>`;
     axes.forEach((a, ai) => {
-      const v = a.hi - (a.hi - a.lo) * i / 4;
-      const dec = Math.abs(a.hi - a.lo) < 10 ? 1 : 0;
-      svg += `<text x="${ai === 0 ? m.l - 6 : m.l + w + 6}" y="${yy + 3}" text-anchor="${ai === 0 ? 'end' : 'start'}" class="tick">${v.toFixed(dec)}</text>`;
+      svg += `<text x="${ai === 0 ? m.l - 6 : m.l + w + 6}" y="${yy + 3}" text-anchor="${ai === 0 ? 'end' : 'start'}" class="tick">${a.labels[i]}</text>`;
     });
   }
   axes.forEach((a, ai) => {
-    svg += `<text x="${ai === 0 ? 4 : width - 4}" y="${m.t + 8}" text-anchor="${ai === 0 ? 'start' : 'end'}" class="tick unit">${esc(a.unit)}</text>`;
+    svg += `<text x="${ai === 0 ? m.l - 6 : m.l + w + 6}" y="11" text-anchor="${ai === 0 ? 'end' : 'start'}" class="tick unit">${esc(a.unit)}</text>`;
   });
   const ticks = width < 500 ? 4 : 6;
   for (let i = 0; i <= ticks; i++) {
@@ -1076,8 +1081,6 @@ function attachTooltip(box, svgW, items) {
 // Stubići min-max sa tačkom proseka; bars = [{label, sub, min, max, avg, extra}]
 function drawRangeBars(box, bars, meta, color) {
   const width = Math.max(300, box.clientWidth), height = 220;
-  const m = { l: 50, r: 14, t: 12, b: 30 };
-  const w = width - m.l - m.r, h = height - m.t - m.b;
   const valid = bars.filter((b) => b.avg != null);
   if (!valid.length) {
     box.innerHTML = '<p class="muted">Još nema dovoljno sačuvanih podataka.</p>';
@@ -1086,17 +1089,21 @@ function drawRangeBars(box, bars, meta, color) {
   let lo = Math.min(...valid.map((b) => b.min)), hi = Math.max(...valid.map((b) => b.max));
   if (hi - lo < 1e-6) { lo -= 1; hi += 1; }
   const pad = (hi - lo) * 0.08; lo -= pad; hi += pad;
+  const dec = Math.abs(hi - lo) < 10 ? 1 : 0;
+  const labels = [0, 1, 2, 3, 4].map((i) => (hi - (hi - lo) * i / 4).toFixed(dec));
+  // Margina prema najdužoj oznaci; jedinica stoji u posebnom redu iznad ose
+  const m = { l: Math.max(36, Math.max(...labels.map((l) => l.length)) * 6.6 + 12), r: 14, t: 22, b: 30 };
+  const w = width - m.l - m.r, h = height - m.t - m.b;
   const y = (v) => m.t + h - (v - lo) / (hi - lo) * h;
   const step = w / bars.length;
   const bw = Math.max(3, Math.min(28, step * 0.55));
-  const dec = Math.abs(hi - lo) < 10 ? 1 : 0;
   let svg = `<svg width="${width}" height="${height}" class="chart-svg">`;
   for (let i = 0; i <= 4; i++) {
     const yy = m.t + h * i / 4;
     svg += `<line x1="${m.l}" x2="${m.l + w}" y1="${yy}" y2="${yy}" class="grid"/>
-      <text x="${m.l - 6}" y="${yy + 3}" text-anchor="end" class="tick">${(hi - (hi - lo) * i / 4).toFixed(dec)}</text>`;
+      <text x="${m.l - 6}" y="${yy + 3}" text-anchor="end" class="tick">${labels[i]}</text>`;
   }
-  svg += `<text x="4" y="${m.t + 8}" class="tick unit">${esc(meta.unit)}</text>`;
+  svg += `<text x="${m.l - 6}" y="11" text-anchor="end" class="tick unit">${esc(meta.unit)}</text>`;
   const labelEvery = Math.ceil(bars.length / (width < 500 ? 6 : 12));
   const items = [];
   bars.forEach((b, i) => {

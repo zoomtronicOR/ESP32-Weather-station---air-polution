@@ -595,6 +595,8 @@ static void handleSystem(AsyncWebServerRequest *req) {
     doc["ota_partition_bytes"] = ESP.getFreeSketchSpace();
     doc["fs_total"] = LittleFS.totalBytes();
     doc["fs_used"] = LittleFS.usedBytes();
+    doc["history_fs_total"] = storage_manager::fsTotalBytes();
+    doc["history_fs_used"] = storage_manager::fsUsedBytes();
     doc["history_5min"] = storage_manager::count(storage_manager::Resolution::Min5);
     doc["history_5min_capacity"] = storage_manager::capacity(storage_manager::Resolution::Min5);
     doc["history_hour"] = storage_manager::count(storage_manager::Resolution::Hour);

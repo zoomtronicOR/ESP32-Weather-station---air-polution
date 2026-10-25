@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The project uses **PlatformIO with the Arduino framework** (pioarduino platform 53.03.13 = Arduino-ESP32 3.1.3 on ESP-IDF 5.3). The user confirmed this choice. Arduino core 3.x APIs differ from 2.x (e.g. `esp_task_wdt_config_t`, the RMT/LEDC APIs), so check that any library you add supports core 3.x.
 
-Development follows the staged plan in spec §19–20. **Phase 1** (board bring-up: chip ID, serial, restart, watchdog) is done. Work through the later phases in order.
+Development follows the staged plan in spec §19–20. Phases 1–7 are done (firmware v0.5.0). The current status table is in spec §19A. **Next: Phase 8, alarms and diagnostics** (thresholds with hysteresis, active/past alarms, MQTT alarm topics, log view in the UI).
 
 - `docs/ESP32_R201_Meteo_Stanica_Specifikacija.md`: the full functional and technical spec (in Serbian). It is the source of truth for requirements. Read the relevant section before you implement any module.
 - `docs/Front.jpg` / `docs/Back.jpg`: photos of the actual dev board.
@@ -33,7 +33,7 @@ The project language and all user-facing text (web UI, OLED, log messages, docs,
 
 ## Hardware (confirmed in Phase 1)
 
-- **NodeMCU ESP-32S V1.1** (38-pin, USB-C, CP2102 on **COM7**). The chip is an **ESP32-D0WD-V3 rev v3.1**: dual core at 240 MHz, **4 MB flash, no PSRAM**. The partition table is the custom `partitions.csv`: 2 × 1.625 MB OTA apps, 640 KB LittleFS (`spiffs` label) and 64 KB coredump. NVS sits at the default offset, so config survives. The firmware is ~1.22 MB (≈72 %). Keep `partitions.csv` **ASCII-only**, because PlatformIO reads it in the Windows codepage and crashes on č/š. Changing the table needs a full `pio run -t upload` followed by `pio run -t uploadfs`.
+- **NodeMCU ESP-32S V1.1** (38-pin, USB-C, CP2102 on **COM7**). The chip is an **ESP32-D0WD-V3 rev v3.1**: dual core at 240 MHz, **4 MB flash, no PSRAM**. The partition table is the custom `partitions.csv`: 2 × 1.625 MB OTA apps, 192 KB LittleFS for the web UI (`spiffs` label, mounted as `LittleFS`), a **separate 448 KB LittleFS partition `history`** (subtype `undefined`, mounted by `storage_manager` as its own `fs::LittleFSFS` at `/hist`) and 64 KB coredump. **The history partition must NOT have subtype `spiffs`**: PlatformIO's `uploadfs` builds and flashes the image for the *last* spiffs partition, which once overwrote history with the web image and left a stale 640 KB superblock on the web partition (`lfs_fs_grow` assert, boot loop). NVS sits at the default offset, so config survives. The firmware is ~1.22 MB (≈72 %). Keep `partitions.csv` **ASCII-only**, because PlatformIO reads it in the Windows codepage and crashes on č/š. Changing the table needs a full `pio run -t upload` followed by `pio run -t uploadfs`.
 - With no PSRAM, GPIO16/17 are free. The SPS30 uses them as a **second, dedicated I2C bus** (`Wire1`, SDA=16, SCL=17, 100 kHz, address 0x69, SEL pin to GND, pull-ups to 3.3 V, 5 V supply). This was the user's decision, replacing UART, and keeps SPS30 traffic and faults off the main bus.
 - **Never use** GPIO6–11 (internal flash). Use strapping pins (GPIO0, 2, 5, 12, 15) only with care: GPIO12 must be low at boot. GPIO34–39 are input-only with no internal pull-ups.
 - All pin assignments live in `include/pins.h`: I2C SDA=21/SCL=22 (BME680, MPU9250/6500/9255, LTR-390, SSD1306 128×32 OLED), SPS30 on I2C1 SDA=16/SCL=17, WS2812B data=27, onboard blue status LED=2 (confirmed), BOOT button=0.
@@ -98,3 +98,11 @@ Follow the staged bring-up in spec §19–20: bare ESP32 (done), then an I2C sca
 ## Git
 
 Commits are authored as the user (`Zoran Nikolić`, configured in the local repo config). Do **not** add `Co-Authored-By: Claude` or "Generated with Claude Code" lines; the user explicitly asked for this.
+
+## Open items (end of session 2026-10-25)
+
+- SPS30 bus (GPIO16/17) still lacks external pull-ups, so the status LED shows 2 flashes (the user disabled the LED in settings).
+- Once, right after the first NTP sync following a re-flash, the board rebooted (`SW_CPU_RESET`). It didn't reproduce. The first history flush after sync took ~2.5 s. Watch for this.
+- The `history` partition still holds leftover web files from the mis-flashed image (~300 KB used). Clearing history (UI → Istorija → Obriši istoriju) only recreates the history files. A clean reformat of that partition would reclaim the space.
+- The WS2812B LED isn't connected (`led_manager` not implemented). OTA, alarms and optional sensors are not started.
+- The admin password was still the AP default at last check. The user should set their own in Podešavanja → Pristup.

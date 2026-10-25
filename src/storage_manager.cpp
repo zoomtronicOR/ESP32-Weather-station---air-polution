@@ -40,6 +40,9 @@ static Ring s_rings[2] = {
 
 static SemaphoreHandle_t s_mutex = nullptr;
 
+// Posebna LittleFS particija "history" -- uploadfs/OTA web fajlova je ne dira
+static fs::LittleFSFS s_fs;
+
 static Ring &ring(Resolution r) { return s_rings[r == Resolution::Min5 ? 0 : 1]; }
 
 // ---------------------------------------------------------------------------
@@ -47,7 +50,7 @@ static Ring &ring(Resolution r) { return s_rings[r == Resolution::Min5 ? 0 : 1];
 // ---------------------------------------------------------------------------
 
 static bool createRing(Ring &rg) {
-    File f = LittleFS.open(rg.path, "w");
+    File f = s_fs.open(rg.path, "w");
     if (!f) return false;
     rg.hdr = {MAGIC, VERSION, (uint16_t)METRICS, (uint16_t)sizeof(HistRecord), rg.capacity, 0, 0};
     f.write((const uint8_t *)&rg.hdr, sizeof(rg.hdr));
@@ -63,7 +66,7 @@ static bool createRing(Ring &rg) {
 
 static bool openRing(Ring &rg) {
     size_t expected = sizeof(RingHeader) + (size_t)rg.capacity * sizeof(HistRecord);
-    File f = LittleFS.open(rg.path, "r");
+    File f = s_fs.open(rg.path, "r");
     if (f) {
         bool good = f.size() == expected && f.read((uint8_t *)&rg.hdr, sizeof(rg.hdr)) == sizeof(rg.hdr) &&
                     rg.hdr.magic == MAGIC && rg.hdr.version == VERSION && rg.hdr.metricCount == METRICS &&
@@ -78,7 +81,7 @@ static bool openRing(Ring &rg) {
 }
 
 static bool appendRecord(Ring &rg, const HistRecord &rec) {
-    File f = LittleFS.open(rg.path, "r+");
+    File f = s_fs.open(rg.path, "r+");
     if (!f) return false;
     bool ok = f.seek(sizeof(RingHeader) + (size_t)rg.hdr.head * sizeof(HistRecord)) &&
               f.write((const uint8_t *)&rec, sizeof(rec)) == sizeof(rec);
@@ -169,7 +172,7 @@ static void rebuildHour(uint32_t hour) {
     Ring &rg = ring(Resolution::Min5);
     accReset(s_hourAcc);
     s_hourId = hour;
-    File f = LittleFS.open(rg.path, "r");
+    File f = s_fs.open(rg.path, "r");
     if (!f) return;
     HistRecord rec;
     size_t n = rg.hdr.count;
@@ -246,7 +249,7 @@ static void flushPending() {
 
 void begin() {
     s_mutex = xSemaphoreCreateMutex();
-    if (!LittleFS.begin(true)) {
+    if (!s_fs.begin(true, "/hist", 4, "history")) {
         LOG_E(TAG, "LittleFS nije dostupan -- istorija se ne čuva");
         return;
     }
@@ -304,7 +307,7 @@ void update(uint32_t now) {
 void clear() {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     for (Ring &rg : s_rings) {
-        LittleFS.remove(rg.path);
+        s_fs.remove(rg.path);
         rg.ok = createRing(rg);
     }
     accReset(s_hourAcc);
@@ -322,11 +325,15 @@ uint32_t intervalSeconds(Resolution r) { return ring(r).interval; }
 
 size_t pendingCount() { return s_pendingCount; }
 
+size_t fsTotalBytes() { return s_fs.totalBytes(); }
+
+size_t fsUsedBytes() { return s_fs.usedBytes(); }
+
 void forEach(Resolution r, uint32_t from, const std::function<void(const HistRecord &)> &fn) {
     Ring &rg = ring(r);
     if (!rg.ok) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    File f = LittleFS.open(rg.path, "r");
+    File f = s_fs.open(rg.path, "r");
     if (f) {
         HistRecord rec;
         for (size_t i = 0; i < rg.hdr.count; i++) {
@@ -342,7 +349,7 @@ size_t readRange(Resolution r, size_t start, HistRecord *out, size_t n) {
     if (!rg.ok) return 0;
     size_t got = 0;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    File f = LittleFS.open(rg.path, "r");
+    File f = s_fs.open(rg.path, "r");
     if (f) {
         while (got < n && readRecordLocked(rg, f, start + got, out[got])) got++;
         f.close();
@@ -356,7 +363,7 @@ bool readAt(Resolution r, size_t index, HistRecord &out) {
     if (!rg.ok) return false;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
     bool ok = false;
-    File f = LittleFS.open(rg.path, "r");
+    File f = s_fs.open(rg.path, "r");
     if (f) {
         ok = readRecordLocked(rg, f, index, out);
         f.close();

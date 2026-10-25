@@ -37,6 +37,8 @@ size_t count(Resolution r);
 size_t capacity(Resolution r);
 uint32_t intervalSeconds(Resolution r);
 size_t pendingCount();  // intervali koji čekaju pouzdano vreme
+size_t fsTotalBytes();  // particija "history"
+size_t fsUsedBytes();
 
 // Prolaz kroz zapise od najstarijeg ka najnovijem, sa ts >= from.
 // Bezbedno za poziv iz web zadatka (zaključava pristup fajlu).
