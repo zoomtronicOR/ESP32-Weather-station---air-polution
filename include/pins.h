@@ -5,7 +5,7 @@
 // GPIO0, 2, 5, 12, 15 su strapping pinovi; GPIO12 mora biti nizak pri pokretanju.
 // GPIO34–39 su samo ulazni, bez internih pull-up otpornika.
 
-// Ugrađena LED dioda na ploči (status / heartbeat) -- potvrditi u Fazi 1
+// Ugrađena plava LED dioda na ploči (status / heartbeat) -- potvrđeno u Fazi 1
 #define PIN_STATUS_LED    2
 
 // Taster BOOT na ploči (čitati tek nakon pokretanja)

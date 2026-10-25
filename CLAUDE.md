@@ -36,7 +36,7 @@ The project language and all user-facing text (web UI, OLED, log messages, docs,
 - **NodeMCU ESP-32S V1.1** (38-pin, USB-C, CP2102 on **COM7**). The chip is an **ESP32-D0WD-V3 rev v3.1**: dual core at 240 MHz, **4 MB flash, no PSRAM**. The partition table is `default.csv` (2 × 1.25 MB OTA apps + 1.375 MB LittleFS).
 - With no PSRAM, GPIO16/17 are free for UART2 (SPS30).
 - **Never use** GPIO6–11 (internal flash). Use strapping pins (GPIO0, 2, 5, 12, 15) only with care: GPIO12 must be low at boot. GPIO34–39 are input-only with no internal pull-ups.
-- All pin assignments live in `include/pins.h`: I2C SDA=21/SCL=22 (BME680, MPU9250/6500/9255, LTR-390, SSD1306 128×32 OLED), SPS30 UART2 RX=16/TX=17, WS2812B data=27, status LED=2 (not yet visually confirmed), BOOT button=0.
+- All pin assignments live in `include/pins.h`: I2C SDA=21/SCL=22 (BME680, MPU9250/6500/9255, LTR-390, SSD1306 128×32 OLED), SPS30 UART2 RX=16/TX=17, WS2812B data=27, onboard blue status LED=2 (confirmed), BOOT button=0.
 - WS2812B must be driven via the RMT peripheral, not bit-banged. It runs on a 5 V supply, and a 3.3→5 V level shifter is recommended.
 - Open hardware questions (spec §22) include the exact MPU variant (MPU6500 has no magnetometer, so detect it at runtime), whether the OLED is at 0x3C or 0x3D, whether the SPS30 is on UART or I2C, and the WS2812B form factor and LED count.
 
