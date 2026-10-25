@@ -40,6 +40,31 @@ static void test_oled_draw() {
     oled.print("Okvir 128×32");
     oled.sendBuffer();
     Serial.println("  Zatim: okvir uz sve četiri ivice i tekst 'Okvir 128×32'");
+    delay(3000);
+}
+
+static void test_oled_brightness() {
+    oled.clearBuffer();
+    oled.setCursor(0, 12);
+    oled.print("Osvetljenje:");
+    oled.setCursor(0, 28);
+    oled.print("podrazumevano");
+    oled.sendBuffer();
+    Serial.println("  Osvetljenje: podrazumevano (5 s)");
+    delay(5000);
+
+    // Maksimalno osvetljenje: kontrast, pre-charge period i VCOMH nivo
+    oled.setContrast(255);
+    oled.sendF("ca", 0xD9, 0xF1);  // pre-charge: faza 1 = 1, faza 2 = 15
+    oled.sendF("ca", 0xDB, 0x40);  // VCOMH deselect nivo
+
+    oled.clearBuffer();
+    oled.setCursor(0, 12);
+    oled.print("Osvetljenje:");
+    oled.setCursor(0, 28);
+    oled.print("MAKSIMALNO");
+    oled.sendBuffer();
+    Serial.println("  Osvetljenje: maksimalno (ostaje na ekranu)");
 }
 
 void setup() {
@@ -50,6 +75,7 @@ void setup() {
     UNITY_BEGIN();
     RUN_TEST(test_oled_ack);
     RUN_TEST(test_oled_draw);
+    RUN_TEST(test_oled_brightness);
     UNITY_END();
 }
 
