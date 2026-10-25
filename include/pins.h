@@ -26,7 +26,10 @@
 
 // AS3935 detektor munja
 #define PIN_AS3935_IRQ    34   // samo ulaz
-#define PIN_AS3935_CS     13   // samo ako se koristi SPI
+#define PIN_AS3935_CS     13   // samo ako se koristi SPI (VSPI)
+#define PIN_AS3935_SCK    18
+#define PIN_AS3935_MISO   19
+#define PIN_AS3935_MOSI   23
 
 // Anemometar i kišomer (PCNT, spoljni pull-up 10 kΩ)
 #define PIN_ANEMOMETER    26
@@ -40,12 +43,6 @@
 // MH-Z19B preko UART1
 #define PIN_MHZ19_RX      35   // samo ulaz
 #define PIN_MHZ19_TX      33
-
-// microSD (VSPI)
-#define PIN_SD_SCK        18
-#define PIN_SD_MISO       19
-#define PIN_SD_MOSI       23
-#define PIN_SD_CS         5
 
 // Buzzer (preko tranzistora)
 #define PIN_BUZZER        4
