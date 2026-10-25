@@ -191,6 +191,36 @@ static void publishDiscovery() {
     LOG_I(TAG, "Home Assistant Discovery objavljen (prefiks \"%s\")", cfg.mqttDiscoveryPrefix);
 }
 
+// Entiteti koji nisu metrike (moraju odgovarati onima iz publishDiscovery)
+static const char *const EXTRA_ENTITIES[][2] = {
+    {"sensor", "wifi_rssi"},      {"sensor", "uptime"},           {"sensor", "sensors_ok"},
+    {"sensor", "time_last_sync"}, {"sensor", "time_status"},      {"binary_sensor", "mqtt_connected"},
+    {"button", "restart"},
+};
+
+// Prazna retained poruka na Discovery topic uklanja entitet iz Home Assistant-a (specifikacija §4A.5)
+static void unpublishDiscovery() {
+    const DeviceConfig &cfg = config_manager::get();
+    char id[40], topic[160];
+    deviceId(id, sizeof(id));
+    for (size_t i = 0; i < (size_t)MetricId::Count; i++) {
+        snprintf(topic, sizeof(topic), "%s/%s/%s/%s/config", cfg.mqttDiscoveryPrefix, HA_ENTITIES[i].component, id,
+                 metrics::def((MetricId)i).key);
+        publish(topic, "", 1, true);
+    }
+    for (const auto &e : EXTRA_ENTITIES) {
+        snprintf(topic, sizeof(topic), "%s/%s/%s/%s/config", cfg.mqttDiscoveryPrefix, e[0], id, e[1]);
+        publish(topic, "", 1, true);
+    }
+    // Brišu se i retained poruke stanja na brokeru
+    const char *retainedTopics[] = {"availability", "status", "time_status", "time_last_sync"};
+    for (const char *t : retainedTopics) {
+        snprintf(topic, sizeof(topic), "%s/%s", cfg.mqttBaseTopic, t);
+        publish(topic, "", 1, true);
+    }
+    LOG_I(TAG, "Uređaj uklonjen iz Home Assistant-a (prazne Discovery poruke)");
+}
+
 // ---------------------------------------------------------------------------
 // Objavljivanje merenja
 // ---------------------------------------------------------------------------
@@ -374,6 +404,47 @@ static void startClient() {
 
 void begin() {}
 
+static bool s_forgetPending = false;
+static uint32_t s_forgetAtMs = 0;
+
+bool removeFromHomeAssistant() {
+    if (!s_client || !s_connected) return false;
+    unpublishDiscovery();
+    return true;
+}
+
+static void doForget() {
+    stopClient();
+    // MQTT polja se vraćaju na podrazumevane vrednosti; ostala podešavanja ostaju
+    const DeviceConfig defaults;
+    DeviceConfig &c = config_manager::edit();
+    c.mqttEnabled = defaults.mqttEnabled;
+    strlcpy(c.mqttHost, defaults.mqttHost, sizeof(c.mqttHost));
+    c.mqttPort = defaults.mqttPort;
+    strlcpy(c.mqttUser, defaults.mqttUser, sizeof(c.mqttUser));
+    strlcpy(c.mqttPass, defaults.mqttPass, sizeof(c.mqttPass));
+    strlcpy(c.mqttClientId, defaults.mqttClientId, sizeof(c.mqttClientId));
+    strlcpy(c.mqttBaseTopic, defaults.mqttBaseTopic, sizeof(c.mqttBaseTopic));
+    c.mqttIntervalS = defaults.mqttIntervalS;
+    c.mqttQos = defaults.mqttQos;
+    c.mqttDiscovery = defaults.mqttDiscovery;
+    strlcpy(c.mqttDiscoveryPrefix, defaults.mqttDiscoveryPrefix, sizeof(c.mqttDiscoveryPrefix));
+    config_manager::save();
+    s_forgetPending = false;
+    s_errorText[0] = '\0';
+    LOG_W(TAG, "MQTT podešavanja su obrisana");
+}
+
+void forget(bool removeFromHa) {
+    if (removeFromHa && removeFromHomeAssistant()) {
+        // Poruke šalje MQTT zadatak -- brisanje i prekid veze tek posle kratkog odloga
+        s_forgetPending = true;
+        s_forgetAtMs = millis() + 1500;
+    } else {
+        doForget();
+    }
+}
+
 void restart() {
     stopClient();
     for (size_t i = 0; i < (size_t)MetricId::Count; i++) s_sentValid[i] = false;
@@ -381,6 +452,10 @@ void restart() {
 }
 
 void update(uint32_t now, bool networkUp) {
+    if (s_forgetPending) {
+        if ((int32_t)(now - s_forgetAtMs) >= 0) doForget();
+        return;
+    }
     const DeviceConfig &cfg = config_manager::get();
     bool shouldRun = cfg.mqttEnabled && cfg.mqttHost[0] != '\0';
 

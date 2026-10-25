@@ -42,13 +42,17 @@ enum Action : uint32_t {
     ACT_DISPLAY = 1 << 6,
     ACT_MQTT_RESTART = 1 << 7,
     ACT_FACTORY_RESET = 1 << 8,
+    ACT_MQTT_CLEAR = 1 << 9,
 };
 
 static SemaphoreHandle_t s_mutex = nullptr;
 static uint32_t s_pending = 0;
 static DeviceConfig s_pendingConfig;
 static time_t s_pendingEpoch = 0;
+static bool s_pendingRemoveFromHa = true;
 static uint32_t s_restartAtMs = 0;
+static uint32_t s_factoryResetAtMs = 0;
+static uint32_t s_wifiReconnectAtMs = 0;
 
 // Vraća kopiju konfiguracije u koju handler upisuje izmene (poziva se pod mutex-om)
 static DeviceConfig &pendingConfig() {
@@ -59,11 +63,23 @@ static DeviceConfig &pendingConfig() {
     return s_pendingConfig;
 }
 
+static bool due(uint32_t at, uint32_t now) { return at != 0 && (int32_t)(now - at) >= 0; }
+
 void update(uint32_t now) {
-    if (s_restartAtMs != 0 && (int32_t)(now - s_restartAtMs) >= 0) {
+    if (due(s_factoryResetAtMs, now)) {
+        // Briše Wi-Fi mrežu, lozinke, MQTT i ostala podešavanja; posle restarta se pokreće portal
+        s_factoryResetAtMs = 0;
+        config_manager::resetToDefaults();
+        s_restartAtMs = now + 500;
+    }
+    if (due(s_restartAtMs, now)) {
         LOG_W(TAG, "Restart na zahtev iz web interfejsa");
         delay(100);
         ESP.restart();
+    }
+    if (due(s_wifiReconnectAtMs, now)) {
+        s_wifiReconnectAtMs = 0;
+        wifi_manager::reconnect(now);
     }
     if (s_pending == 0 || xSemaphoreTake(s_mutex, 0) != pdTRUE) {
         return;
@@ -74,6 +90,7 @@ void update(uint32_t now) {
         config_manager::edit() = s_pendingConfig;
     }
     time_t epoch = s_pendingEpoch;
+    bool removeFromHa = s_pendingRemoveFromHa;
     xSemaphoreGive(s_mutex);
 
     if (actions & ACT_SAVE_CONFIG) config_manager::save();
@@ -84,13 +101,21 @@ void update(uint32_t now) {
     }
     if (actions & ACT_SET_TIME) time_manager::setManual(epoch);
     if (actions & ACT_MQTT_RESTART) mqtt_manager::restart();
-    if (actions & ACT_WIFI_RECONNECT) wifi_manager::reconnect(now);
+    // Uklanjanje iz Home Assistant-a traži vezu sa brokerom, pa se prekid veze (Wi-Fi, reset) odlaže
+    bool haRemovalSent = false;
+    if (actions & ACT_MQTT_CLEAR) {
+        haRemovalSent = removeFromHa && mqtt_manager::connected();
+        mqtt_manager::forget(removeFromHa);
+    }
+    if (actions & ACT_WIFI_RECONNECT) {
+        if (haRemovalSent) s_wifiReconnectAtMs = now + 2000;
+        else wifi_manager::reconnect(now);
+    }
     if (actions & ACT_PORTAL) wifi_manager::startPortal(now);
     if (actions & ACT_FACTORY_RESET) {
-        // Briše Wi-Fi mrežu, lozinke, MQTT i ostala podešavanja; posle restarta se pokreće portal
         LOG_W(TAG, "Vraćanje na fabrička podešavanja na zahtev iz web interfejsa");
-        config_manager::resetToDefaults();
-        s_restartAtMs = now + 1500;
+        bool sent = removeFromHa && mqtt_manager::removeFromHomeAssistant();
+        s_factoryResetAtMs = now + (sent ? 2000 : 1000);  // odgovor stigne do pregledača pre restarta
     }
     if (actions & ACT_RESTART) s_restartAtMs = now + 1000;  // odgovor stigne do pregledača pre restarta
 }
@@ -634,8 +659,33 @@ static void handleWifiPost(AsyncWebServerRequest *req, JsonVariant &json) {
     if (hostname) strlcpy(cfg.hostname, hostname, sizeof(cfg.hostname));
     if (admin && strlen(admin) > 0) strlcpy(cfg.adminPass, admin, sizeof(cfg.adminPass));
     s_pending |= ACT_WIFI_RECONNECT;
+    // Nova lokacija / drugi Home Assistant: brišu se i MQTT podešavanja
+    bool clearMqtt = json["clear_mqtt"] | false;
+    if (clearMqtt) {
+        s_pending |= ACT_MQTT_CLEAR;
+        s_pendingRemoveFromHa = true;
+    }
     unlock();
-    sendOk(req, "Podešavanja su sačuvana. Uređaj se povezuje na mrežu.");
+    sendOk(req, clearMqtt ? "Podešavanja su sačuvana, MQTT podešavanja obrisana. Uređaj se povezuje na mrežu."
+                          : "Podešavanja su sačuvana. Uređaj se povezuje na mrežu.");
+}
+
+static void handleMqttClear(AsyncWebServerRequest *req, JsonVariant &json) {
+    if (!requireAuth(req)) return;
+    if (!lock()) return sendError(req, 503, "Uređaj je zauzet, pokušajte ponovo.");
+    s_pendingRemoveFromHa = json["remove_from_ha"] | true;
+    s_pending |= ACT_MQTT_CLEAR;
+    unlock();
+    sendOk(req, "MQTT podešavanja su obrisana.");
+}
+
+static void handleFactoryReset(AsyncWebServerRequest *req, JsonVariant &json) {
+    if (!requireAuth(req)) return;
+    if (!lock()) return sendError(req, 503, "Uređaj je zauzet, pokušajte ponovo.");
+    s_pendingRemoveFromHa = json["remove_from_ha"] | true;
+    s_pending |= ACT_FACTORY_RESET;
+    unlock();
+    sendOk(req, "Podešavanja su obrisana. Uređaj se restartuje i pokreće konfiguracioni portal METEO-ESP32-SETUP.");
 }
 
 static void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
@@ -810,33 +860,32 @@ void begin() {
               (unsigned long)LittleFS.totalBytes());
     }
 
-    s_server.on("/api/v1/status", HTTP_GET, handleStatus);
-    s_server.on("/api/v1/readings", HTTP_GET, handleReadings);
-    s_server.on("/api/v1/sensors", HTTP_GET, handleSensors);
-    s_server.on("/api/v1/time", HTTP_GET, handleTime);
+    // VAŽNO: ruta "/x" hvata i "/x/..." (AsyncURIMatcher), pa se podputanje registruju PRE roditeljskih
     s_server.on("/api/v1/wifi/scan", HTTP_GET, handleWifiScan);
-    s_server.on("/api/v1/wifi", HTTP_GET, handleWifi);
-    s_server.on("/api/v1/config", HTTP_GET, handleConfig);
-    s_server.on("/api/v1/system", HTTP_GET, handleSystem);
-    s_server.on("/api/v1/mqtt", HTTP_GET, handleMqtt);
-    s_server.on("/api/v1/mqtt", HTTP_POST, handleMqttPost);
-
-    s_server.on("/api/v1/wifi", HTTP_POST, handleWifiPost);
-    s_server.on("/api/v1/config", HTTP_POST, handleConfigPost);
-    s_server.on("/api/v1/time", HTTP_POST, handleTimePost);
-    s_server.on("/api/v1/auth", HTTP_POST, [](AsyncWebServerRequest *req) {
-        if (requireAuth(req)) sendOk(req, "Prijava uspešna.");
-    });
     s_server.on("/api/v1/wifi/portal", HTTP_POST, [](AsyncWebServerRequest *req) {
         handleAction(req, ACT_PORTAL, "Konfiguracioni portal je pokrenut.");
     });
+    s_server.on("/api/v1/mqtt/clear", HTTP_POST, handleMqttClear);
     s_server.on("/api/v1/system/restart", HTTP_POST, [](AsyncWebServerRequest *req) {
         handleAction(req, ACT_RESTART, "Uređaj se restartuje.");
     });
     // Fabrička podešavanja: samo iz web interfejsa (ne preko MQTT-a), uz administratorsku lozinku
-    s_server.on("/api/v1/system/factory-reset", HTTP_POST, [](AsyncWebServerRequest *req) {
-        handleAction(req, ACT_FACTORY_RESET,
-                     "Podešavanja su obrisana. Uređaj se restartuje i pokreće konfiguracioni portal METEO-ESP32-SETUP.");
+    s_server.on("/api/v1/system/factory-reset", HTTP_POST, handleFactoryReset);
+
+    s_server.on("/api/v1/status", HTTP_GET, handleStatus);
+    s_server.on("/api/v1/readings", HTTP_GET, handleReadings);
+    s_server.on("/api/v1/sensors", HTTP_GET, handleSensors);
+    s_server.on("/api/v1/time", HTTP_GET, handleTime);
+    s_server.on("/api/v1/time", HTTP_POST, handleTimePost);
+    s_server.on("/api/v1/wifi", HTTP_GET, handleWifi);
+    s_server.on("/api/v1/wifi", HTTP_POST, handleWifiPost);
+    s_server.on("/api/v1/config", HTTP_GET, handleConfig);
+    s_server.on("/api/v1/config", HTTP_POST, handleConfigPost);
+    s_server.on("/api/v1/mqtt", HTTP_GET, handleMqtt);
+    s_server.on("/api/v1/mqtt", HTTP_POST, handleMqttPost);
+    s_server.on("/api/v1/system", HTTP_GET, handleSystem);
+    s_server.on("/api/v1/auth", HTTP_POST, [](AsyncWebServerRequest *req) {
+        if (requireAuth(req)) sendOk(req, "Prijava uspešna.");
     });
 
     s_server.serveStatic("/", LittleFS, "/").setDefaultFile("index.html").setCacheControl("no-cache");

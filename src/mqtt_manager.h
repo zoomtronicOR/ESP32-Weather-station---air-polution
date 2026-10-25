@@ -12,6 +12,12 @@ void update(uint32_t now, bool networkUp);
 // Nova MQTT podešavanja -- klijent se zaustavlja i ponovo pokreće
 void restart();
 
+// Šalje prazne Discovery poruke, pa Home Assistant uklanja uređaj; false ako nema veze sa brokerom
+bool removeFromHomeAssistant();
+// Briše MQTT podešavanja (npr. pri prelasku na drugi Home Assistant); uz removeFromHa
+// uređaj se prvo uklanja iz trenutnog Home Assistant-a
+void forget(bool removeFromHa);
+
 bool enabled();
 bool connected();
 const char *lastError();

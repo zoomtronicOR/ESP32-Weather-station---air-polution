@@ -195,6 +195,8 @@ async function refreshStatus() {
     state.timezone = s.time.timezone || state.timezone;
     if (s.time.valid) state.clockOffsetMs = s.time.epoch_ms - Date.now();
     renderClock();
+    const year = s.time.valid ? s.time.local.slice(0, 4) : new Date().getFullYear();
+    $('#sidebar-foot').innerHTML = `Made by <b>Zoomtronic</b><br>verzija ${esc(s.firmware)} · ${esc(year)}`;
   } catch (e) {
     $('#clock-text').textContent = 'Uređaj nije dostupan';
     $('#time-dot').className = 'dot';
@@ -488,6 +490,7 @@ async function pageWifi(main) {
           <label>Maska podmreže<input name="subnet" value="${esc(w.static.subnet)}"></label>
           <label>DNS<input name="dns" value="${esc(w.static.dns)}"></label>
         </div>
+        <label class="check"><input type="checkbox" name="clear_mqtt"> Obriši MQTT podešavanja (nova lokacija / drugi Home Assistant)</label>
         ${firstSetup ? `<label>Nova administratorska lozinka (najmanje 8 znakova)
           <input name="admin_password" type="password" minlength="8" maxlength="64" autocomplete="new-password"></label>` : ''}
         <div class="row-end"><button class="btn" type="submit">Sačuvaj i poveži</button></div>
@@ -503,6 +506,7 @@ async function pageWifi(main) {
     if (form.password.value) body.password = form.password.value;
     if (body.static_ip) ['ip', 'gateway', 'subnet', 'dns'].forEach((k) => { body[k] = form[k].value.trim(); });
     if (form.admin_password && form.admin_password.value) body.admin_password = form.admin_password.value;
+    if (form.clear_mqtt.checked) body.clear_mqtt = true;
     try {
       const res = w.portal_client
         ? await api('/wifi', { method: 'POST', body })
@@ -677,7 +681,21 @@ async function pageMqtt(main) {
         <p class="muted small">TLS veza još nije podržana; koristiti broker u lokalnoj mreži (port 1883).</p>
         <div class="row-end"><button class="btn" type="submit">Sačuvaj</button></div>
       </form>
+    </div>
+    <div class="panel"><h3>Brisanje MQTT podešavanja</h3>
+      <p class="small">Za prelazak na drugi broker ili drugi Home Assistant: briše adresu brokera, korisnika i lozinku i isključuje MQTT.
+        Wi-Fi i ostala podešavanja ostaju.</p>
+      <label class="check"><input type="checkbox" id="mqtt-remove-ha" checked> Ukloni uređaj iz trenutnog Home Assistant-a</label>
+      <p class="muted small">Uklanjanje radi samo dok je MQTT povezan: uređaj šalje prazne Discovery poruke i Home Assistant briše entitete.</p>
+      <div class="actions"><button class="btn danger" id="mqtt-clear">Obriši MQTT podešavanja</button></div>
     </div>`;
+  $('#mqtt-clear').onclick = async () => {
+    if (!confirm('Obrisati MQTT podešavanja?')) return;
+    try {
+      banner((await adminApi('/mqtt/clear', { remove_from_ha: $('#mqtt-remove-ha').checked })).message);
+      setTimeout(() => { if (state.page === 'mqtt') pageMqtt(main); }, 2500);
+    } catch (e) { banner(e.message, true); }
+  };
   const f = $('#mqtt-form');
   f.onsubmit = async (ev) => {
     ev.preventDefault();
@@ -736,13 +754,14 @@ async function pageSystem(main) {
       <p class="small">Briše sačuvanu Wi-Fi mrežu, administratorsku lozinku i lozinku pristupne tačke, MQTT, NTP i podešavanja prikaza.
         Posle restarta uređaj pokreće konfiguracioni portal <b>METEO-ESP32-SETUP</b>; lozinka pristupne tačke je prikazana na OLED-u.
         Koristiti npr. kada se stanica prenosi u drugu Wi-Fi mrežu.</p>
+      <label class="check"><input type="checkbox" id="factory-remove-ha" checked> Ukloni uređaj iz trenutnog Home Assistant-a (ako je MQTT povezan)</label>
       <div class="actions"><button class="btn danger" id="factory-btn">Vrati fabrička podešavanja</button></div>
     </div>`;
   $('#factory-btn').onclick = async () => {
     if (!confirm('Obrisati SVA podešavanja (Wi-Fi, lozinke, MQTT, NTP, prikaz) i restartovati uređaj?')) return;
     if (!confirm('Da li ste sigurni? Uređaj će izaći iz ove Wi-Fi mreže i pokrenuti portal za podešavanje.')) return;
     try {
-      banner((await adminApi('/system/factory-reset')).message);
+      banner((await adminApi('/system/factory-reset', { remove_from_ha: $('#factory-remove-ha').checked })).message);
       setStoredAuth(null);
     } catch (e) { banner(e.message, true); }
   };
