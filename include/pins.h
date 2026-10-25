@@ -15,9 +15,10 @@
 #define PIN_I2C_SDA       21
 #define PIN_I2C_SCL       22
 
-// SPS30 preko UART2
-#define PIN_SPS30_RX      16
-#define PIN_SPS30_TX      17
+// SPS30 na zasebnoj I2C magistrali (I2C1 / Wire1), 100 kHz, adresa 0x69
+// SEL pin SPS30 na GND; pull-up otpornici na 3,3 V
+#define PIN_SPS30_SDA     16
+#define PIN_SPS30_SCL     17
 
 // WS2812B LED indikator kvaliteta vazduha (RMT)
 #define PIN_WS2812B       27

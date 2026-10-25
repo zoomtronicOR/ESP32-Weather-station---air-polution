@@ -34,13 +34,14 @@ The project language and all user-facing text (web UI, OLED, log messages, docs,
 ## Hardware (confirmed in Phase 1)
 
 - **NodeMCU ESP-32S V1.1** (38-pin, USB-C, CP2102 on **COM7**). The chip is an **ESP32-D0WD-V3 rev v3.1**: dual core at 240 MHz, **4 MB flash, no PSRAM**. The partition table is `default.csv` (2 × 1.25 MB OTA apps + 1.375 MB LittleFS).
-- With no PSRAM, GPIO16/17 are free for UART2 (SPS30).
+- With no PSRAM, GPIO16/17 are free. The SPS30 uses them as a **second, dedicated I2C bus** (`Wire1`, SDA=16, SCL=17, 100 kHz, address 0x69, SEL pin to GND, pull-ups to 3.3 V, 5 V supply). This was the user's decision, replacing UART, and keeps SPS30 traffic and faults off the main bus.
 - **Never use** GPIO6–11 (internal flash). Use strapping pins (GPIO0, 2, 5, 12, 15) only with care: GPIO12 must be low at boot. GPIO34–39 are input-only with no internal pull-ups.
-- All pin assignments live in `include/pins.h`: I2C SDA=21/SCL=22 (BME680, MPU9250/6500/9255, LTR-390, SSD1306 128×32 OLED), SPS30 UART2 RX=16/TX=17, WS2812B data=27, onboard blue status LED=2 (confirmed), BOOT button=0.
+- All pin assignments live in `include/pins.h`: I2C SDA=21/SCL=22 (BME680, MPU9250/6500/9255, LTR-390, SSD1306 128×32 OLED), SPS30 on I2C1 SDA=16/SCL=17, WS2812B data=27, onboard blue status LED=2 (confirmed), BOOT button=0.
 - WS2812B must be driven via the RMT peripheral, not bit-banged. It runs on a 5 V supply, and a 3.3→5 V level shifter is recommended.
 - I2C devices confirmed in Phase 2 (`c` serial command): OLED `0x3C`, LTR-390 `0x53`, **MPU6500** `0x68` (WHO_AM_I 0x70, so no magnetometer: no compass/µT values; keep runtime WHO_AM_I detection), BME680 `0x77`. The bus is error-free at both 100 and 400 kHz (`t` command) and stays at 100 kHz for now.
 - Optional sensors (SCD40/41, AHT2x, AS3935, SHT4x, SGP4x, VEML7700/BH1750, INA219, MH-Z19B, wind/rain) have reserved pins in `pins.h` and follow spec §4A. Each sensor is a driver with a common interface (`detect/begin/poll`, metrics, pin info). Identity is always confirmed via an ID register or serial number, never by address alone. UI, MQTT, HA Discovery and history are generated from the registry of active metrics. Every quantity has a user-selectable primary source with fallback. **The user's rule: never add an optional sensor whose I2C address can collide with the base devices (0x3C, 0x53, 0x68, 0x77). Do not work around a collision with address changes or a multiplexer.** That excludes DS3231, ENS160, BMP280/BME280 and TCA9548A, and also means there is no RTC.
-- Still open (spec §22): whether the SPS30 is on UART or I2C, and the WS2812B form factor and LED count.
+- Still open (spec §22): the WS2812B form factor and LED count.
+- Per-sensor on-device tests live in `test/test_bme680`, `test_mpu`, `test_ltr390` and `test_oled`. They are standalone: no `src/` code, libraries used directly. Run them with `pio test -v -f <name>`. Without `-v`, the measured values printed by the tests are hidden.
 
 ## Code layout
 
