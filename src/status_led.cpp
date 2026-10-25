@@ -14,6 +14,7 @@ static constexpr uint32_t FLASH_PERIOD_MS = 300; // bljesak + razmak u nizu
 static Pattern s_pattern = Pattern::Solid;
 static uint32_t s_patternStartMs = 0;
 static bool s_ledOn = false;
+static bool s_enabled = true;
 
 static bool codeFlash(uint32_t t, uint8_t count) {
     uint32_t p = t % CYCLE_MS;
@@ -51,8 +52,15 @@ void set(Pattern pattern) {
     s_patternStartMs = millis();  // novi obrazac počinje od početka ciklusa
 }
 
+void setEnabled(bool enabled) {
+    if (enabled != s_enabled) {
+        LOG_I(TAG, "Statusna LED %s", enabled ? "uključena" : "isključena");
+    }
+    s_enabled = enabled;
+}
+
 void update(uint32_t now) {
-    bool on = isOn(s_pattern, now - s_patternStartMs);
+    bool on = s_enabled && isOn(s_pattern, now - s_patternStartMs);
     if (on != s_ledOn) {
         s_ledOn = on;
         digitalWrite(PIN_STATUS_LED, on ? HIGH : LOW);

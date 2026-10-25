@@ -65,6 +65,7 @@ void begin() {
     s_config.ntpIntervalMin = p.getUShort("ntpint", 60);
     loadString(p, "tz", s_config.timezone, sizeof(s_config.timezone));
     s_config.oledBrightness = p.getUChar("oledbr", 80);
+    s_config.statusLedEnabled = p.getBool("sled", true);
     p.end();
 
     // Oporavak od neispravnih vrednosti (specifikacija §17)
@@ -108,6 +109,7 @@ bool save() {
     p.putUShort("ntpint", s_config.ntpIntervalMin);
     p.putString("tz", s_config.timezone);
     p.putUChar("oledbr", s_config.oledBrightness);
+    p.putBool("sled", s_config.statusLedEnabled);
     p.end();
     LOG_I(TAG, "Konfiguracija sačuvana");
     return true;

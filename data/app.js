@@ -217,8 +217,143 @@ function cardHtml(m) {
     <div class="value">${value}${unit}</div><div class="foot">${foot}</div></div>`;
 }
 
+// ---------------------------------------------------------------------------
+// Instrumenti (gauge) -- specifikacija §6.2
+// Zone boja samo prema zvaničnim skalama: PM2.5/PM10 i nivo prema EAQI, UV indeks prema WHO.
+// Ostali instrumenti su neutralni (bez izmišljenih pragova).
+// ---------------------------------------------------------------------------
+
+const EAQI_PM25 = [[5, AQ_COLORS[1]], [15, AQ_COLORS[2]], [50, AQ_COLORS[3]], [90, AQ_COLORS[4]], [140, AQ_COLORS[5]], [Infinity, AQ_COLORS[6]]];
+const EAQI_PM10 = [[15, AQ_COLORS[1]], [45, AQ_COLORS[2]], [120, AQ_COLORS[3]], [195, AQ_COLORS[4]], [270, AQ_COLORS[5]], [Infinity, AQ_COLORS[6]]];
+const WHO_UV = [[2.5, '#3EA72D'], [5.5, '#FFF300'], [7.5, '#F18B00'], [10.5, '#E53210'], [Infinity, '#B567A4']];
+
+const GAUGES = {
+  temperature: { min: -20, max: 45 },
+  humidity: { min: 0, max: 100 },
+  pressure: { min: 950, max: 1050 },
+  gas_resistance: { min: 1000, max: 500000, log: true, scale: 0.001, unit: 'kΩ', decimals: 1 },
+  pm1_0: { min: 0, max: 150 },
+  pm2_5: { min: 0, max: 150, zones: EAQI_PM25 },
+  pm4: { min: 0, max: 150 },
+  pm10: { min: 0, max: 300, zones: EAQI_PM10 },
+  typical_particle_size: { min: 0, max: 3 },
+  uv_index: { min: 0, max: 12, zones: WHO_UV },
+  illuminance: { min: 0, max: 100000, log: true },
+  pitch: { min: -90, max: 90 },
+  roll: { min: -180, max: 180 },
+};
+
+const G_START = 150, G_SWEEP = 240, G_CX = 60, G_CY = 60;
+
+function polar(r, deg) {
+  const a = deg * Math.PI / 180;
+  return [G_CX + r * Math.cos(a), G_CY + r * Math.sin(a)];
+}
+
+function arcPath(r, fromFrac, toFrac) {
+  const a0 = G_START + G_SWEEP * fromFrac, a1 = G_START + G_SWEEP * toFrac;
+  const [x0, y0] = polar(r, a0), [x1, y1] = polar(r, a1);
+  return `M${x0.toFixed(2)} ${y0.toFixed(2)} A${r} ${r} 0 ${a1 - a0 > 180 ? 1 : 0} 1 ${x1.toFixed(2)} ${y1.toFixed(2)}`;
+}
+
+function gaugeFrac(v, g) {
+  const f = g.log
+    ? (Math.log10(Math.max(v, g.min) + 1) - Math.log10(g.min + 1)) / (Math.log10(g.max + 1) - Math.log10(g.min + 1))
+    : (v - g.min) / (g.max - g.min);
+  return Math.max(0, Math.min(1, f));
+}
+
+function zoneColor(v, zones) {
+  for (const [to, color] of zones) if (v <= to) return color;
+  return zones[zones.length - 1][1];
+}
+
+function gaugeHtml(m) {
+  const g = GAUGES[m.key];
+  const ok = m.state === 'ok';
+  const raw = ok ? Number(m.value) : null;
+  const shown = ok ? (g.scale ? (raw * g.scale).toFixed(g.decimals) : m.value) : '--';
+  const unit = g.unit || m.unit;
+  const frac = ok ? gaugeFrac(raw, g) : 0;
+  const color = ok ? (g.zones ? zoneColor(raw, g.zones) : 'var(--accent)') : 'var(--na)';
+
+  let zones = '';
+  if (g.zones) {
+    let from = g.min;
+    for (const [to, c] of g.zones) {
+      const end = Math.min(to, g.max);
+      if (end > from) zones += `<path d="${arcPath(54, gaugeFrac(from, g), gaugeFrac(end, g))}" stroke="${c}" stroke-width="4" fill="none"/>`;
+      from = end;
+      if (end >= g.max) break;
+    }
+  }
+  const minLabel = g.scale ? g.min * g.scale : g.min;
+  const maxLabel = g.scale ? g.max * g.scale : g.max;
+  const fmt = (n) => (Math.abs(n) >= 1000 ? (n / 1000) + 'k' : n);
+  const sub = ok ? `ažurirano ${ago(m.age_s)}` : esc(m.reason || (m.state === 'unknown' ? 'čeka se prvo merenje' : 'nedostupno'));
+  return `<div class="card gauge state-${m.state}">
+    <div class="head"><span>${esc(m.name)}</span><span class="icon">${ICONS[m.key] || ''}</span></div>
+    <svg viewBox="0 0 120 104" role="img" aria-label="${esc(m.name)}: ${esc(shown)} ${esc(unit)}">
+      ${zones}
+      <path d="${arcPath(44, 0, 1)}" stroke="var(--border)" stroke-width="10" fill="none" stroke-linecap="round"/>
+      ${ok && frac > 0.002 ? `<path d="${arcPath(44, 0, frac)}" stroke="${color}" stroke-width="10" fill="none" stroke-linecap="round"/>` : ''}
+      <text x="60" y="62" text-anchor="middle" class="g-val">${esc(shown)}</text>
+      <text x="60" y="78" text-anchor="middle" class="g-unit">${esc(unit)}</text>
+      <text x="22" y="100" text-anchor="middle" class="g-lim">${fmt(minLabel)}</text>
+      <text x="98" y="100" text-anchor="middle" class="g-lim">${fmt(maxLabel)}</text>
+    </svg>
+    <div class="foot">${sub}</div></div>`;
+}
+
+function eaqiGaugeHtml(aq) {
+  const lvl = aq.level || 0;
+  let zones = '';
+  for (let i = 1; i <= 6; i++) {
+    zones += `<path d="${arcPath(54, (i - 1) / 6, i / 6)}" stroke="${AQ_COLORS[i]}" stroke-width="4" fill="none"/>`;
+  }
+  const frac = lvl ? lvl / 6 : 0;
+  return `<div class="card gauge">
+    <div class="head"><span>Kvalitet vazduha (EAQI)</span><span class="icon">🍃</span></div>
+    <svg viewBox="0 0 120 104" role="img" aria-label="Kvalitet vazduha: ${esc(aq.name)}">
+      ${zones}
+      <path d="${arcPath(44, 0, 1)}" stroke="var(--border)" stroke-width="10" fill="none" stroke-linecap="round"/>
+      ${lvl ? `<path d="${arcPath(44, 0, frac)}" stroke="${AQ_COLORS[lvl]}" stroke-width="10" fill="none" stroke-linecap="round"/>` : ''}
+      <text x="60" y="62" text-anchor="middle" class="g-val">${lvl ? lvl + '/6' : '--'}</text>
+      <text x="60" y="78" text-anchor="middle" class="g-unit">${esc(lvl ? aq.name : 'nepoznat')}</text>
+      <text x="22" y="100" text-anchor="middle" class="g-lim">1</text>
+      <text x="98" y="100" text-anchor="middle" class="g-lim">6</text>
+    </svg>
+    <div class="foot">${lvl ? 'lokalna procena, klizni prosek 10 min' : 'nema svežih PM merenja'}</div></div>`;
+}
+
+function getDashView() {
+  try { return localStorage.getItem('dashView') || 'cards'; } catch (e) { return 'cards'; }
+}
+
+function setDashView(v) {
+  try { localStorage.setItem('dashView', v); } catch (e) { /* nije dostupno */ }
+}
+
 async function pageDashboard(main) {
   const [r, s] = await Promise.all([api('/readings'), api('/status')]);
+  const view = getDashView();
+  const toggle = `<div class="seg" role="group" aria-label="Prikaz">
+      <button class="${view === 'cards' ? 'active' : ''}" data-view="cards">Kartice</button>
+      <button class="${view === 'gauges' ? 'active' : ''}" data-view="gauges">Instrumenti</button></div>`;
+  const bindToggle = () => main.querySelectorAll('.seg button').forEach((b) => {
+    b.onclick = () => { setDashView(b.dataset.view); pageDashboard(main); };
+  });
+
+  if (view === 'gauges') {
+    const gauges = r.metrics.filter((m) => GAUGES[m.key]).map(gaugeHtml).join('');
+    const motion = r.metrics.find((m) => m.key === 'motion');
+    main.innerHTML = `<div class="page-head"><h2>Kontrolna tabla</h2>${toggle}</div>
+      <div class="grid gauges">${eaqiGaugeHtml(r.air_quality)}${gauges}${motion ? cardHtml(motion) : ''}</div>
+      <p class="muted small">Boje zona: PM2.5, PM10 i nivo kvaliteta vazduha prema EAQI (lokalna procena), UV indeks prema skali WHO.
+        Ostali instrumenti nemaju pragove. Gasni otpor i osvetljenost su na logaritamskoj skali.</p>`;
+    bindToggle();
+    return;
+  }
   const aq = r.air_quality;
   const aqCard = `<div class="card aq" style="--aq:${AQ_COLORS[aq.level] || 'var(--na)'}">
       <div class="head"><span>Kvalitet vazduha (EAQI)</span><span class="icon">🍃</span></div>
@@ -237,8 +372,9 @@ async function pageDashboard(main) {
   const statusCard = `<div class="card"><div class="head"><span>Status uređaja</span><span class="icon">⚙️</span></div>
       <div class="value" style="font-size:20px">${s.sensors.ok}/${s.sensors.total} <span class="unit">senzora</span></div>
       <div class="foot">${sensorsOk ? 'svi senzori ispravni' : 'proveriti stranicu Senzori'} · Wi-Fi ${s.wifi.connected ? esc(s.wifi.ip) : (s.wifi.portal ? 'portal' : 'nije povezan')}</div></div>`;
-  main.innerHTML = `<h2>Kontrolna tabla</h2><div class="grid">${aqCard}${cards}${statusCard}</div>
+  main.innerHTML = `<div class="page-head"><h2>Kontrolna tabla</h2>${toggle}</div><div class="grid">${aqCard}${cards}${statusCard}</div>
     <p class="muted small">Vrednosti su lokalno izmerene; nivo kvaliteta vazduha je lokalna procena po skali EAQI, a ne zvanični indeks.</p>`;
+  bindToggle();
 }
 
 function pinsText(pins) {
@@ -361,6 +497,10 @@ async function pageSettings(main) {
         <label>Osvetljenje OLED ekrana: <b id="oled-val">${c.oled_brightness} %</b>
           <input type="range" name="oled_brightness" min="0" max="100" step="5" value="${c.oled_brightness}"></label>
         <p class="muted small">0 % isključuje ekran. Promena se primenjuje odmah.</p>
+        <label class="check"><input type="checkbox" name="status_led_enabled" ${c.status_led_enabled ? 'checked' : ''}>
+          Statusna LED dioda na ploči uključena</label>
+        <p class="muted small">Plava LED kodom treptanja pokazuje stanje uređaja (1 bljesak / 2 s = sve ispravno).
+          Kada je isključena, stanje se i dalje vidi na stranici Sistem.</p>
       </form>
     </div>
     <div class="panel"><h3>Vreme i NTP</h3>
@@ -401,6 +541,16 @@ async function pageSettings(main) {
     }, 300);
   };
 
+  df.status_led_enabled.onchange = async () => {
+    try {
+      const res = await adminApi('/config', { status_led_enabled: df.status_led_enabled.checked });
+      banner(res.message);
+    } catch (e) {
+      df.status_led_enabled.checked = !df.status_led_enabled.checked;
+      banner(e.message, true);
+    }
+  };
+
   const tf = $('#time-form');
   tf.onsubmit = async (ev) => {
     ev.preventDefault();
@@ -436,9 +586,36 @@ async function pageSettings(main) {
   };
 }
 
+// Traka zauzeća; pragovi boja (70 % / 90 %) su korisnički, ne zvanični
+function resourceBar(title, pct, detail, invert = false) {
+  const p = Math.max(0, Math.min(100, pct));
+  const level = invert ? 100 - p : p;
+  const cls = level >= 90 ? 'crit' : level >= 70 ? 'warn' : '';
+  return `<div><div class="res-head"><span>${esc(title)}</span><span>${esc(detail)}</span></div>
+    <div class="bar ${cls}" role="progressbar" aria-valuenow="${Math.round(p)}" aria-valuemin="0" aria-valuemax="100">
+      <span style="width:${p.toFixed(1)}%"></span></div></div>`;
+}
+
 async function pageSystem(main) {
   const s = await api('/system');
+  const heapUsed = s.heap_total - s.heap_free;
+  const bars = [
+    resourceBar('RAM (heap)', heapUsed / s.heap_total * 100,
+      `${bytes(heapUsed)} / ${bytes(s.heap_total)} · ${Math.round(heapUsed / s.heap_total * 100)} %`),
+    resourceBar('Najmanje slobodne RAM memorije od pokretanja', (s.heap_total - s.heap_min_free) / s.heap_total * 100,
+      `slobodno najmanje ${bytes(s.heap_min_free)}`),
+    resourceBar('Firmware (OTA particija)', s.sketch_bytes / s.ota_partition_bytes * 100,
+      `${bytes(s.sketch_bytes)} / ${bytes(s.ota_partition_bytes)} · ${Math.round(s.sketch_bytes / s.ota_partition_bytes * 100)} %`),
+    resourceBar('LittleFS (web i istorija)', s.fs_used / s.fs_total * 100,
+      `${bytes(s.fs_used)} / ${bytes(s.fs_total)} · ${Math.round(s.fs_used / s.fs_total * 100)} %`),
+  ];
+  if (s.rssi != null) {
+    // RSSI -90 dBm (slabo) .. -30 dBm (odlično) preslikano na 0–100 %
+    const q = Math.max(0, Math.min(100, (s.rssi + 90) / 60 * 100));
+    bars.push(resourceBar('Jačina Wi-Fi signala', q, `${s.rssi} dBm · ${Math.round(q)} %`, true));
+  }
   main.innerHTML = `<h2>Sistem</h2>
+    <div class="panel"><h3>Resursi</h3><div class="resources">${bars.join('')}</div></div>
     <div class="panel"><table>
       <tr><td class="k">Uređaj</td><td>${esc(s.device)}</td></tr>
       <tr><td class="k">Verzija firmware-a</td><td>${esc(s.firmware)}</td></tr>
@@ -449,6 +626,7 @@ async function pageSystem(main) {
       <tr><td class="k">Vreme rada</td><td>${duration(s.uptime_s)}</td></tr>
       <tr><td class="k">Razlog poslednjeg restarta</td><td>${esc(s.reset_reason)}</td></tr>
       <tr><td class="k">Broj pokretanja</td><td>${s.boot_count}</td></tr>
+      <tr><td class="k">Statusna LED</td><td>${esc(s.status_led)}${s.status_led_enabled ? '' : ' (dioda isključena)'}</td></tr>
       <tr><td class="k">MAC adresa</td><td>${esc(s.mac)}</td></tr>
       <tr><td class="k">ESP-IDF / Arduino</td><td>${esc(s.sdk)} / ${esc(s.arduino)}</td></tr>
     </table></div>

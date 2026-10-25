@@ -75,7 +75,10 @@ void update(uint32_t now) {
 
     if (actions & ACT_SAVE_CONFIG) config_manager::save();
     if (actions & ACT_TIME_CONFIG) time_manager::applyConfig();
-    if (actions & ACT_DISPLAY) display_manager::applyBrightness();
+    if (actions & ACT_DISPLAY) {
+        display_manager::applyBrightness();
+        status_led::setEnabled(config_manager::get().statusLedEnabled);
+    }
     if (actions & ACT_SET_TIME) time_manager::setManual(epoch);
     if (actions & ACT_WIFI_RECONNECT) wifi_manager::reconnect(now);
     if (actions & ACT_PORTAL) wifi_manager::startPortal(now);
@@ -481,6 +484,7 @@ static void handleConfig(AsyncWebServerRequest *req) {
     JsonArray tz = doc["timezones"].to<JsonArray>();
     for (size_t i = 0; i < config_manager::timezoneCount(); i++) tz.add(config_manager::timezoneName(i));
     doc["oled_brightness"] = cfg.oledBrightness;
+    doc["status_led_enabled"] = cfg.statusLedEnabled;
     // Lozinke se nikada ne vraćaju -- samo informacija da li su podešene (specifikacija §13)
     doc["admin_password_set"] = config_manager::adminPasswordSet();
     doc["ap_password_custom"] = cfg.apPass[0] != '\0';
@@ -504,6 +508,7 @@ static void handleSystem(AsyncWebServerRequest *req) {
     doc["uptime_s"] = millis() / 1000;
     doc["reset_reason"] = diagnostics::resetReasonText(diagnostics::resetReason());
     doc["boot_count"] = diagnostics::bootCount();
+    doc["heap_total"] = ESP.getHeapSize();
     doc["heap_free"] = ESP.getFreeHeap();
     doc["heap_min_free"] = ESP.getMinFreeHeap();
     doc["heap_max_block"] = ESP.getMaxAllocHeap();
@@ -512,7 +517,10 @@ static void handleSystem(AsyncWebServerRequest *req) {
     doc["fs_total"] = LittleFS.totalBytes();
     doc["fs_used"] = LittleFS.usedBytes();
     doc["mac"] = WiFi.macAddress();
+    if (wifi_manager::connected()) doc["rssi"] = WiFi.RSSI();
     doc["time_status"] = time_manager::statusKey(time_manager::status());
+    doc["status_led"] = status_led::describe(status_led::current());
+    doc["status_led_enabled"] = config_manager::get().statusLedEnabled;
     sendJson(req, doc);
 }
 
@@ -592,6 +600,10 @@ static void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
         int v = json["oled_brightness"];
         if (v < 0 || v > 100) return sendError(req, 400, "Osvetljenje ekrana mora biti 0--100 %.");
         cfg.oledBrightness = v;
+        displayChanged = true;
+    }
+    if (json["status_led_enabled"].is<bool>()) {
+        cfg.statusLedEnabled = json["status_led_enabled"];
         displayChanged = true;
     }
     if (json["ntp_enabled"].is<bool>()) { cfg.ntpEnabled = json["ntp_enabled"]; timeChanged = true; }

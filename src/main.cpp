@@ -152,6 +152,7 @@ void setup() {
     diagnostics::printChipInfo();
     setupWatchdog();
     config_manager::begin();
+    status_led::setEnabled(config_manager::get().statusLedEnabled);
     time_manager::begin();
     i2c_bus::begin();
     i2c_bus::printScan();

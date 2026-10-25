@@ -53,7 +53,7 @@ a { color: var(--accent); }
   border-bottom: 1px solid var(--border);
 }
 .brand { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 17px; }
-.logo { font-size: 22px; }
+.logo { width: 32px; height: 32px; display: block; }
 .clock {
   flex: 1; text-align: center;
   font-variant-numeric: tabular-nums;
@@ -102,6 +102,19 @@ h3 { margin: 0 0 12px; font-size: 16px; }
 .card .foot { font-size: 12px; color: var(--muted); }
 .card.aq { border-left: 6px solid var(--aq, var(--na)); }
 
+.page-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+.page-head h2 { margin: 0; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { font: inherit; border: 0; background: transparent; color: var(--text); padding: 6px 14px; cursor: pointer; }
+.seg button.active { background: var(--accent); color: #fff; }
+
+.grid.gauges { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
+.card.gauge svg { display: block; width: 100%; max-width: 200px; margin: 4px auto 0; }
+.g-val { font-size: 19px; font-weight: 600; fill: var(--text); font-variant-numeric: tabular-nums; }
+.g-unit { font-size: 10px; fill: var(--muted); }
+.g-lim { font-size: 9px; fill: var(--muted); }
+.card.gauge.state-unavailable .g-val, .card.gauge.state-unknown .g-val { fill: var(--na); }
+
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; box-shadow: var(--shadow); }
 
 table { width: 100%; border-collapse: collapse; }
@@ -131,6 +144,14 @@ label.check { display: flex; align-items: center; gap: 8px; color: var(--text); 
 .btn.danger { background: var(--crit); }
 .row-end { display: flex; justify-content: flex-end; gap: 8px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.resources { display: grid; gap: 14px; }
+.res-head { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; margin-bottom: 4px; }
+.res-head span:last-child { color: var(--muted); font-variant-numeric: tabular-nums; }
+.bar { height: 10px; border-radius: 999px; background: var(--border); overflow: hidden; }
+.bar > span { display: block; height: 100%; border-radius: 999px; background: var(--ok); transition: width .4s; }
+.bar.warn > span { background: var(--warn); }
+.bar.crit > span { background: var(--crit); }
 
 .muted { color: var(--muted); }
 .small { font-size: 13px; }

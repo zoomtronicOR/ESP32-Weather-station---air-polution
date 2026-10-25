@@ -20,6 +20,8 @@ enum class Pattern : uint8_t {
 
 void begin();
 void set(Pattern pattern);
+// Isključena LED ne svetli, ali se obrazac i dalje određuje (prikazuje se u web interfejsu)
+void setEnabled(bool enabled);
 void update(uint32_t now);
 
 Pattern current();
