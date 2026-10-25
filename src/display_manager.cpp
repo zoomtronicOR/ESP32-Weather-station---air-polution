@@ -17,9 +17,28 @@ static const char *TAG = "oled";
 // Ekran deli glavnu I2C magistralu (Wire) koju je već pokrenuo i2c_bus
 static U8G2_SSD1306_128X32_UNIVISION_F_HW_I2C s_oled(U8G2_R0, U8X8_PIN_NONE);
 
+// Dva reda po ekranu. Osnovni font: podebljan 8×15 px (16 znakova u redu);
+// red koji ne staje crta se užim fontom 7×13 px (18 znakova). Oba sadrže č ć š ž đ, °, µ, ³.
+static const uint8_t *const FONT_BIG = u8g2_font_t0_16b_te;
+static const uint8_t *const FONT_NARROW = u8g2_font_t0_14b_te;
+static constexpr int16_t ROW_BASELINE[2] = {12, 28};
+static constexpr int16_t WIDTH = 128;
+static constexpr int16_t LABEL_GAP = 6;
+
 enum class Screen : uint8_t { Splash, Connection, Rotation };
 
-enum Page : uint8_t { PAGE_BASIC, PAGE_AIR, PAGE_LIGHT, PAGE_EAQI, PAGE_STATUS, PAGE_COUNT };
+enum Page : uint8_t {
+    PAGE_TEMP_HUM,
+    PAGE_PRESSURE_GAS,
+    PAGE_PM_SMALL,
+    PAGE_PM_LARGE,
+    PAGE_EAQI,
+    PAGE_UV_LIGHT,
+    PAGE_TILT,
+    PAGE_NETWORK,
+    PAGE_SYSTEM,
+    PAGE_COUNT
+};
 
 static bool s_available = false;
 static uint8_t s_address = 0x3C;
@@ -33,13 +52,11 @@ static uint8_t s_page = 0;
 static uint32_t s_pageStartMs = 0;
 static bool s_portalTurn = true;
 
-static uint8_t s_shift = 0;
+// Zaštita od burn-in: sadržaj se naizmenično pomera za 1 piksel horizontalno
+static uint8_t s_shiftX = 0;
 static uint32_t s_lastShiftMs = 0;
 
 static ConnectionInfo s_conn;
-
-// Tri reda teksta (font t0_11b, 21 znak u redu)
-static constexpr uint8_t LINE_Y[3] = {9, 20, 31};
 
 static bool detect() {
     for (uint8_t addr : {0x3C, 0x3D}) {
@@ -68,8 +85,6 @@ static bool init() {
         return false;
     }
     s_oled.enableUTF8Print();
-    // Podebljan font visine 11 px (tri reda staju u 32 px); sadrži č ć š ž đ, °, µ, ³
-    s_oled.setFont(u8g2_font_t0_11b_te);
     applyMaxBrightness();
     return true;
 }
@@ -88,9 +103,30 @@ void begin(uint32_t now) {
 
 bool available() { return s_available; }
 
-static void line(uint8_t row, const char *text) {
-    s_oled.setCursor(s_shift & 1, LINE_Y[row] - ((s_shift >> 1) & 1));
-    s_oled.print(text);
+// Jedan red: naziv levo, vrednost uz desnu ivicu. Bez naziva vrednost se crta od leve ivice.
+static void drawRow(uint8_t row, const char *label, const char *value) {
+    const uint8_t *fonts[2] = {FONT_BIG, FONT_NARROW};
+    for (const uint8_t *font : fonts) {
+        s_oled.setFont(font);
+        int16_t labelW = label[0] ? s_oled.getUTF8Width(label) : 0;
+        int16_t valueW = s_oled.getUTF8Width(value);
+        int16_t needed = labelW + (label[0] ? LABEL_GAP : 0) + valueW + s_shiftX;
+        if (needed <= WIDTH || font == FONT_NARROW) {
+            int16_t y = ROW_BASELINE[row];
+            if (label[0]) {
+                s_oled.drawUTF8(s_shiftX, y, label);
+                s_oled.drawUTF8(WIDTH - valueW - (1 - s_shiftX), y, value);
+            } else {
+                s_oled.drawUTF8(s_shiftX, y, value);
+            }
+            return;
+        }
+    }
+}
+
+static void drawRows(const char *label1, const char *value1, const char *label2, const char *value2) {
+    drawRow(0, label1, value1);
+    drawRow(1, label2, value2);
 }
 
 // Vrednost metrike kao tekst: broj sa jedinicom, "zagrevanje" ili "--"
@@ -99,9 +135,11 @@ static void formatMetric(char *buf, size_t len, MetricId id, uint32_t now, const
     const MetricDef &d = metrics::def(id);
     const Reading &r = metrics::get(id);
     if (metrics::isFresh(id, now)) {
+        float v = r.value * scale;
         int dec = decimalsOverride >= 0 ? decimalsOverride : d.decimals;
+        if (fabsf(v) >= 1000.0f) dec = 0;  // velike vrednosti bez decimala, da stanu u red
         const char *unit = unitOverride ? unitOverride : d.unit;
-        snprintf(buf, len, "%.*f%s%s", dec, r.value * scale, unit[0] ? " " : "", unit);
+        snprintf(buf, len, "%.*f%s%s", dec, v, unit[0] ? " " : "", unit);
     } else if (r.error == ErrorCode::Warmup) {
         snprintf(buf, len, "zagrevanje");
     } else {
@@ -109,128 +147,120 @@ static void formatMetric(char *buf, size_t len, MetricId id, uint32_t now, const
     }
 }
 
-// Red "naziv  vrednost"; naziv se dopunjava do 9 znakova (UTF-8 slova zauzimaju 2 bajta, a jedno mesto)
-static void row(uint8_t r, const char *label, const char *value) {
-    char buf[48];
-    size_t pos = strlcpy(buf, label, sizeof(buf));
-    size_t chars = 0;
-    for (const char *p = label; *p; p++) {
-        if ((*p & 0xC0) != 0x80) chars++;
-    }
-    while (chars++ < 9 && pos < sizeof(buf) - 1) buf[pos++] = ' ';
-    buf[pos] = '\0';
-    strlcat(buf, value, sizeof(buf));
-    line(r, buf);
+static const char *mqttText() {
+    if (!s_conn.mqttEnabled) return "isključen";
+    return s_conn.mqttConnected ? "povezan" : "nije povezan";
 }
 
 static void drawSplash() {
-    line(0, "Meteo stanica");
-    char buf[32];
+    char buf[24];
     snprintf(buf, sizeof(buf), "Firmware %s", FW_VERSION);
-    line(1, buf);
-    line(2, DEVICE_NAME);
+    drawRows("", "Meteo stanica", "", buf);
 }
 
-static void drawConnection() {
+static void drawConnection(uint32_t now) {
     char buf[40];
+    // Kada ima više od dva podatka, smenjuju se dva para na 3 s
+    bool second = ((now - s_screenStartMs) / 3000) % 2 == 1;
     switch (s_conn.mode) {
         case NetMode::Off:
-            line(0, "Wi-Fi: isključen");
-            line(1, "Lokalni rad");
-            snprintf(buf, sizeof(buf), "v%s %s", FW_VERSION, DEVICE_NAME);
-            line(2, buf);
+            drawRows("", "Wi-Fi isključen", "", "Lokalni rad");
             break;
         case NetMode::Connecting:
-            line(0, "Wi-Fi: povezivanje...");
-            line(1, s_conn.ssid);
+            drawRows("", "Wi-Fi povezivanje", "", s_conn.ssid);
             break;
         case NetMode::Connected:
-            snprintf(buf, sizeof(buf), "WiFi %s", s_conn.ssid);
-            line(0, buf);
-            snprintf(buf, sizeof(buf), "IP %s", s_conn.ip);
-            line(1, buf);
-            snprintf(buf, sizeof(buf), "%d dBm  MQTT %s", s_conn.rssi,
-                     !s_conn.mqttEnabled ? "isklj." : (s_conn.mqttConnected ? "OK" : "--"));
-            line(2, buf);
+            if (!second) {
+                drawRows("", s_conn.ssid, "", s_conn.ip);
+            } else {
+                snprintf(buf, sizeof(buf), "%d dBm", s_conn.rssi);
+                drawRows("Signal", buf, "MQTT", mqttText());
+            }
             break;
         case NetMode::Portal:
-            snprintf(buf, sizeof(buf), "AP: %s", s_conn.apSsid);
-            line(0, buf);
-            snprintf(buf, sizeof(buf), "Lozinka: %s", s_conn.apPassword);
-            line(1, buf);
-            snprintf(buf, sizeof(buf), "IP: %s", s_conn.apIp);
-            line(2, buf);
+            if (!second) {
+                drawRows("", s_conn.apSsid, "", s_conn.apPassword);
+            } else {
+                drawRows("", "Podešavanje:", "", s_conn.apIp);
+            }
             break;
     }
 }
 
 static void drawPage(uint8_t page, uint32_t now) {
-    char v[24];
+    char v1[32], v2[32];
     switch (page) {
-        case PAGE_BASIC:
-            formatMetric(v, sizeof(v), MetricId::Temperature, now);
-            row(0, "Temp.", v);
-            formatMetric(v, sizeof(v), MetricId::Humidity, now);
-            row(1, "Vlažnost", v);
-            formatMetric(v, sizeof(v), MetricId::Pressure, now);
-            row(2, "Pritisak", v);
+        case PAGE_TEMP_HUM:
+            formatMetric(v1, sizeof(v1), MetricId::Temperature, now);
+            formatMetric(v2, sizeof(v2), MetricId::Humidity, now);
+            drawRows("Temp.", v1, "Vlažnost", v2);
             break;
 
-        case PAGE_AIR:
-            formatMetric(v, sizeof(v), MetricId::Pm2_5, now);
-            row(0, "PM2.5", v);
-            formatMetric(v, sizeof(v), MetricId::Pm10, now);
-            row(1, "PM10", v);
-            formatMetric(v, sizeof(v), MetricId::GasResistance, now, "kOhm", 0.001f, 1);
-            row(2, "Gas", v);
+        case PAGE_PRESSURE_GAS:
+            formatMetric(v1, sizeof(v1), MetricId::Pressure, now);
+            formatMetric(v2, sizeof(v2), MetricId::GasResistance, now, "kOhm", 0.001f, 1);
+            drawRows("Pritisak", v1, "Gas", v2);
             break;
 
-        case PAGE_LIGHT: {
-            formatMetric(v, sizeof(v), MetricId::UvIndex, now);
-            row(0, "UV indeks", v);
-            formatMetric(v, sizeof(v), MetricId::Illuminance, now);
-            row(1, "Svetlo", v);
-            if (metrics::isFresh(MetricId::Pitch, now)) {
-                snprintf(v, sizeof(v), "%.0f° / %.0f°", metrics::get(MetricId::Pitch).value,
-                         metrics::get(MetricId::Roll).value);
-            } else {
-                snprintf(v, sizeof(v), "--");
-            }
-            row(2, "Nagib", v);
+        case PAGE_PM_SMALL:
+            formatMetric(v1, sizeof(v1), MetricId::Pm1_0, now);
+            formatMetric(v2, sizeof(v2), MetricId::Pm2_5, now);
+            drawRows("PM1.0", v1, "PM2.5", v2);
             break;
-        }
+
+        case PAGE_PM_LARGE:
+            formatMetric(v1, sizeof(v1), MetricId::Pm4, now);
+            formatMetric(v2, sizeof(v2), MetricId::Pm10, now);
+            drawRows("PM4", v1, "PM10", v2);
+            break;
 
         case PAGE_EAQI: {
-            line(0, "Kvalitet vazduha:");
             uint8_t lvl = air_quality::level();
-            char buf[32];
             if (lvl == 0) {
                 const Reading &pm = metrics::get(MetricId::Pm2_5);
-                line(1, pm.error == ErrorCode::Warmup ? "zagrevanje SPS30" : "nepoznat");
+                drawRows("", "Kvalitet vazduha", "", pm.error == ErrorCode::Warmup ? "zagrevanje" : "nepoznat");
             } else {
-                snprintf(buf, sizeof(buf), "%s (%u/6)", air_quality::levelName(lvl), lvl);
-                line(1, buf);
-                snprintf(buf, sizeof(buf), "%s %.1f µg/m³", air_quality::dominant() == MetricId::Pm2_5 ? "PM2.5" : "PM10",
-                         air_quality::dominantAverage());
-                line(2, buf);
+                snprintf(v2, sizeof(v2), "%s %u/6", air_quality::levelName(lvl), lvl);
+                drawRows("", "Kvalitet vazduha", "", v2);
             }
             break;
         }
 
-        case PAGE_STATUS: {
-            char buf[32];
+        case PAGE_UV_LIGHT:
+            formatMetric(v1, sizeof(v1), MetricId::UvIndex, now);
+            formatMetric(v2, sizeof(v2), MetricId::Illuminance, now);
+            drawRows("UV indeks", v1, "Svetlo", v2);
+            break;
+
+        case PAGE_TILT:
+            if (metrics::isFresh(MetricId::Pitch, now)) {
+                snprintf(v1, sizeof(v1), "%.0f°/%.0f°", metrics::get(MetricId::Pitch).value,
+                         metrics::get(MetricId::Roll).value);
+            } else {
+                snprintf(v1, sizeof(v1), "--");
+            }
+            if (metrics::isFresh(MetricId::Motion, now)) {
+                snprintf(v2, sizeof(v2), "%s", metrics::get(MetricId::Motion).value > 0.5f ? "DA" : "ne");
+            } else {
+                snprintf(v2, sizeof(v2), "--");
+            }
+            drawRows("Nagib", v1, "Pomeranje", v2);
+            break;
+
+        case PAGE_NETWORK: {
             const char *wifi = "isključen";
             if (s_conn.mode == NetMode::Connected) wifi = s_conn.ip;
             else if (s_conn.mode == NetMode::Connecting) wifi = "povezivanje";
             else if (s_conn.mode == NetMode::Portal) wifi = "portal";
-            snprintf(buf, sizeof(buf), "WiFi %s", wifi);
-            line(0, buf);
-            snprintf(buf, sizeof(buf), "MQTT %s", !s_conn.mqttEnabled ? "isključen" : (s_conn.mqttConnected ? "OK" : "--"));
-            line(1, buf);
+            drawRows("WiFi", wifi, "MQTT", mqttText());
+            break;
+        }
+
+        case PAGE_SYSTEM: {
             sensor_manager::Health h = sensor_manager::health();
+            snprintf(v1, sizeof(v1), "%u/%u", h.ok, h.total);
             // Vreme se prikazuje posle NTP sinhronizacije (Faza 5); do tada --:--
-            snprintf(buf, sizeof(buf), "Senzori %u/%u   --:--", h.ok, h.total);
-            line(2, buf);
+            drawRows("Senzori", v1, "Vreme", "--:--");
             break;
         }
     }
@@ -247,6 +277,7 @@ void setConnectionInfo(const ConnectionInfo &info, uint32_t now) {
 void showConnection(uint32_t now) {
     if (s_screen == Screen::Splash) return;
     s_screen = Screen::Connection;
+    s_screenStartMs = now;
     s_connectionUntilMs = now + OLED_CONN_REPEAT_MS;
     s_lastRefreshMs = 0;  // odmah osvežiti
 }
@@ -256,6 +287,7 @@ static void advanceScreen(uint32_t now) {
         case Screen::Splash:
             if (now - s_screenStartMs >= OLED_SPLASH_MS) {
                 s_screen = Screen::Connection;
+                s_screenStartMs = now;
                 s_connectionUntilMs = now + OLED_BOOT_CONN_MS;
             }
             break;
@@ -293,14 +325,17 @@ void update(uint32_t now) {
         return;
     }
 
+    uint8_t prevPage = s_page;
+    Screen prevScreen = s_screen;
     advanceScreen(now);
+    bool changed = s_page != prevPage || s_screen != prevScreen;
 
     if (now - s_lastShiftMs >= OLED_SHIFT_MS) {
         s_lastShiftMs = now;
-        s_shift = (s_shift + 1) & 3;
+        s_shiftX ^= 1;
     }
 
-    if (s_lastRefreshMs != 0 && now - s_lastRefreshMs < OLED_REFRESH_MS) {
+    if (!changed && s_lastRefreshMs != 0 && now - s_lastRefreshMs < OLED_REFRESH_MS) {
         return;
     }
     s_lastRefreshMs = now;
@@ -316,9 +351,9 @@ void update(uint32_t now) {
     s_oled.clearBuffer();
     switch (s_screen) {
         case Screen::Splash:     drawSplash(); break;
-        case Screen::Connection: drawConnection(); break;
+        case Screen::Connection: drawConnection(now); break;
         case Screen::Rotation:
-            if (s_conn.mode == NetMode::Portal && s_portalTurn) drawConnection();
+            if (s_conn.mode == NetMode::Portal && s_portalTurn) drawConnection(now);
             else drawPage(s_page, now);
             break;
     }

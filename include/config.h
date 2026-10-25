@@ -41,7 +41,7 @@
 #define OLED_SPLASH_MS      1500    // uvodni ekran
 #define OLED_BOOT_CONN_MS   10000   // podaci za konekciju posle pokretanja
 #define OLED_CONN_REPEAT_MS 5000    // ponovni prikaz posle promene veze ili tastera BOOT
-#define OLED_PAGE_MS        4000    // trajanje jedne stranice u rotaciji
+#define OLED_PAGE_MS        3000    // trajanje jedne stranice u rotaciji (9 stranica)
 #define OLED_REFRESH_MS     1000    // osvežavanje sadržaja
 #define OLED_SHIFT_MS       120000  // pomeranje sadržaja za 1 piksel (zaštita od burn-in)
 #define OLED_RETRY_MS       30000   // ponovni pokušaj ako ekran ne odgovara
