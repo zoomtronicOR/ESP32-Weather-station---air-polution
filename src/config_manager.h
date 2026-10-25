@@ -25,6 +25,19 @@ struct DeviceConfig {
     uint16_t ntpIntervalMin = 60;
     char timezone[40] = "Europe/Belgrade";
 
+    // MQTT (specifikacija §8)
+    bool mqttEnabled = false;
+    char mqttHost[64] = "";
+    uint16_t mqttPort = 1883;
+    char mqttUser[33] = "";
+    char mqttPass[65] = "";
+    char mqttClientId[33] = "esp32_r201";
+    char mqttBaseTopic[64] = "meteo/esp32_r201";
+    uint16_t mqttIntervalS = 10;      // 5–300 s
+    uint8_t mqttQos = 0;              // 0 ili 1
+    bool mqttDiscovery = true;        // Home Assistant MQTT Discovery
+    char mqttDiscoveryPrefix[32] = "homeassistant";
+
     // Prikaz
     uint8_t oledBrightness = 80;  // 0–100 %; 0 = ekran isključen
     bool statusLedEnabled = true; // plava LED na ploči (kod treptanja, specifikacija §16.1)

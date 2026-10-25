@@ -114,6 +114,10 @@ h3 { margin: 0 0 12px; font-size: 16px; }
 .g-unit { font-size: 10px; fill: var(--muted); }
 .g-lim { font-size: 9px; fill: var(--muted); }
 .card.gauge.state-unavailable .g-val, .card.gauge.state-unknown .g-val { fill: var(--na); }
+.g-val-small { font-size: 15px; }
+.g-section { margin-bottom: 20px; }
+.g-section h3 { color: var(--muted); font-weight: 600; font-size: 14px; text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }
+.needle { transition: all .4s; }
 
 .panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; box-shadow: var(--shadow); }
 

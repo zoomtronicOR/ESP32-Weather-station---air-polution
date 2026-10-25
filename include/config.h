@@ -59,6 +59,10 @@
 #define WIFI_PORTAL_TIMEOUT_MS  300000  // portal se gasi posle 5 min ako postoji sačuvana mreža
 #define WIFI_PORTAL_BUTTON_MS   5000    // dug pritisak tastera BOOT ručno pokreće portal
 
+// MQTT (specifikacija §8.5)
+#define MQTT_RECONNECT_MS       10000   // pauza između pokušaja povezivanja na broker
+#define MQTT_FORCE_MS           300000  // nepromenjene vrednosti se ponovo šalju najkasnije na 5 min
+
 // Web server i pristup (specifikacija §14)
 #define WEB_ADMIN_USER          "admin"
 #define AUTH_MAX_FAILURES       5       // neuspešnih prijava pre privremenog zaključavanja

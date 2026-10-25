@@ -268,15 +268,50 @@ function zoneColor(v, zones) {
   return zones[zones.length - 1][1];
 }
 
+function getNeedles() {
+  try { return localStorage.getItem('gaugeNeedles') === '1'; } catch (e) { return false; }
+}
+
+function setNeedles(on) {
+  try { localStorage.setItem('gaugeNeedles', on ? '1' : '0'); } catch (e) { /* nije dostupno */ }
+}
+
+// Zajednički SVG instrumenta; sa kazaljkom vrednost se ispisuje ispod centra
+function gaugeSvg(o) {
+  const needles = getNeedles();
+  let body = `${o.zones}
+      <path d="${arcPath(44, 0, 1)}" stroke="var(--border)" stroke-width="10" fill="none" stroke-linecap="round"/>`;
+  if (o.ok && o.frac > 0.002) {
+    body += `<path d="${arcPath(44, 0, o.frac)}" stroke="${o.color}" stroke-width="${needles ? 6 : 10}" fill="none" stroke-linecap="round"/>`;
+  }
+  if (needles) {
+    // Podeoci na svakih 10 % skale
+    for (let i = 0; i <= 10; i++) {
+      const a = G_START + G_SWEEP * i / 10;
+      const [x0, y0] = polar(36, a), [x1, y1] = polar(i % 5 === 0 ? 30 : 33, a);
+      body += `<line x1="${x0.toFixed(1)}" y1="${y0.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${y1.toFixed(1)}" stroke="var(--muted)" stroke-width="${i % 5 === 0 ? 1.5 : 1}"/>`;
+    }
+    if (o.ok) {
+      const a = G_START + G_SWEEP * o.frac;
+      const [xt, yt] = polar(40, a), [xb, yb] = polar(-8, a);
+      body += `<line x1="${xb.toFixed(1)}" y1="${yb.toFixed(1)}" x2="${xt.toFixed(1)}" y2="${yt.toFixed(1)}" stroke="var(--crit)" stroke-width="2.5" stroke-linecap="round" class="needle"/>`;
+    }
+    body += `<circle cx="60" cy="60" r="5" fill="var(--text)"/>
+      <text x="60" y="90" text-anchor="middle" class="g-val g-val-small">${esc(o.shown)} <tspan class="g-unit">${esc(o.unit)}</tspan></text>`;
+  } else {
+    body += `<text x="60" y="62" text-anchor="middle" class="g-val">${esc(o.shown)}</text>
+      <text x="60" y="78" text-anchor="middle" class="g-unit">${esc(o.unit)}</text>`;
+  }
+  body += `<text x="22" y="100" text-anchor="middle" class="g-lim">${esc(o.minLabel)}</text>
+      <text x="98" y="100" text-anchor="middle" class="g-lim">${esc(o.maxLabel)}</text>`;
+  return `<svg viewBox="0 0 120 104" role="img" aria-label="${esc(o.label)}: ${esc(o.shown)} ${esc(o.unit)}">${body}</svg>`;
+}
+
 function gaugeHtml(m) {
   const g = GAUGES[m.key];
   const ok = m.state === 'ok';
   const raw = ok ? Number(m.value) : null;
   const shown = ok ? (g.scale ? (raw * g.scale).toFixed(g.decimals) : m.value) : '--';
-  const unit = g.unit || m.unit;
-  const frac = ok ? gaugeFrac(raw, g) : 0;
-  const color = ok ? (g.zones ? zoneColor(raw, g.zones) : 'var(--accent)') : 'var(--na)';
-
   let zones = '';
   if (g.zones) {
     let from = g.min;
@@ -287,22 +322,19 @@ function gaugeHtml(m) {
       if (end >= g.max) break;
     }
   }
-  const minLabel = g.scale ? g.min * g.scale : g.min;
-  const maxLabel = g.scale ? g.max * g.scale : g.max;
-  const fmt = (n) => (Math.abs(n) >= 1000 ? (n / 1000) + 'k' : n);
+  const fmt = (n) => (Math.abs(n) >= 1000 ? (n / 1000) + 'k' : String(n));
   const sub = ok ? `ažurirano ${ago(m.age_s)}` : esc(m.reason || (m.state === 'unknown' ? 'čeka se prvo merenje' : 'nedostupno'));
+  const svg = gaugeSvg({
+    ok, shown, zones, label: m.name,
+    unit: g.unit || m.unit,
+    frac: ok ? gaugeFrac(raw, g) : 0,
+    color: ok ? (g.zones ? zoneColor(raw, g.zones) : 'var(--accent)') : 'var(--na)',
+    minLabel: fmt(g.scale ? g.min * g.scale : g.min),
+    maxLabel: fmt(g.scale ? g.max * g.scale : g.max),
+  });
   return `<div class="card gauge state-${m.state}">
     <div class="head"><span>${esc(m.name)}</span><span class="icon">${ICONS[m.key] || ''}</span></div>
-    <svg viewBox="0 0 120 104" role="img" aria-label="${esc(m.name)}: ${esc(shown)} ${esc(unit)}">
-      ${zones}
-      <path d="${arcPath(44, 0, 1)}" stroke="var(--border)" stroke-width="10" fill="none" stroke-linecap="round"/>
-      ${ok && frac > 0.002 ? `<path d="${arcPath(44, 0, frac)}" stroke="${color}" stroke-width="10" fill="none" stroke-linecap="round"/>` : ''}
-      <text x="60" y="62" text-anchor="middle" class="g-val">${esc(shown)}</text>
-      <text x="60" y="78" text-anchor="middle" class="g-unit">${esc(unit)}</text>
-      <text x="22" y="100" text-anchor="middle" class="g-lim">${fmt(minLabel)}</text>
-      <text x="98" y="100" text-anchor="middle" class="g-lim">${fmt(maxLabel)}</text>
-    </svg>
-    <div class="foot">${sub}</div></div>`;
+    ${svg}<div class="foot">${sub}</div></div>`;
 }
 
 function eaqiGaugeHtml(aq) {
@@ -311,20 +343,26 @@ function eaqiGaugeHtml(aq) {
   for (let i = 1; i <= 6; i++) {
     zones += `<path d="${arcPath(54, (i - 1) / 6, i / 6)}" stroke="${AQ_COLORS[i]}" stroke-width="4" fill="none"/>`;
   }
-  const frac = lvl ? lvl / 6 : 0;
+  // Kazaljka pokazuje sredinu polja nivoa
+  const svg = gaugeSvg({
+    ok: lvl > 0, zones, label: 'Kvalitet vazduha',
+    shown: lvl ? `${lvl}/6` : '--', unit: lvl ? aq.name : 'nepoznat',
+    frac: lvl ? (getNeedles() ? (lvl - 0.5) / 6 : lvl / 6) : 0,
+    color: AQ_COLORS[lvl] || 'var(--na)', minLabel: '1', maxLabel: '6',
+  });
   return `<div class="card gauge">
     <div class="head"><span>Kvalitet vazduha (EAQI)</span><span class="icon">🍃</span></div>
-    <svg viewBox="0 0 120 104" role="img" aria-label="Kvalitet vazduha: ${esc(aq.name)}">
-      ${zones}
-      <path d="${arcPath(44, 0, 1)}" stroke="var(--border)" stroke-width="10" fill="none" stroke-linecap="round"/>
-      ${lvl ? `<path d="${arcPath(44, 0, frac)}" stroke="${AQ_COLORS[lvl]}" stroke-width="10" fill="none" stroke-linecap="round"/>` : ''}
-      <text x="60" y="62" text-anchor="middle" class="g-val">${lvl ? lvl + '/6' : '--'}</text>
-      <text x="60" y="78" text-anchor="middle" class="g-unit">${esc(lvl ? aq.name : 'nepoznat')}</text>
-      <text x="22" y="100" text-anchor="middle" class="g-lim">1</text>
-      <text x="98" y="100" text-anchor="middle" class="g-lim">6</text>
-    </svg>
-    <div class="foot">${lvl ? 'lokalna procena, klizni prosek 10 min' : 'nema svežih PM merenja'}</div></div>`;
+    ${svg}<div class="foot">${lvl ? 'lokalna procena, klizni prosek 10 min' : 'nema svežih PM merenja'}</div></div>`;
 }
+
+// Grupe instrumenata na kontrolnoj tabli
+const GAUGE_GROUPS = [
+  { title: 'Klima', keys: ['temperature', 'humidity', 'pressure'] },
+  { title: 'Čestice (PM)', keys: ['pm1_0', 'pm2_5', 'pm4', 'pm10', 'typical_particle_size'] },
+  { title: 'Kvalitet vazduha', keys: ['air_quality_level', 'gas_resistance'] },
+  { title: 'Svetlo i UV', keys: ['uv_index', 'illuminance'] },
+  { title: 'Položaj', keys: ['pitch', 'roll', 'motion'] },
+];
 
 function getDashView() {
   try { return localStorage.getItem('dashView') || 'cards'; } catch (e) { return 'cards'; }
@@ -345,13 +383,23 @@ async function pageDashboard(main) {
   });
 
   if (view === 'gauges') {
-    const gauges = r.metrics.filter((m) => GAUGES[m.key]).map(gaugeHtml).join('');
-    const motion = r.metrics.find((m) => m.key === 'motion');
-    main.innerHTML = `<div class="page-head"><h2>Kontrolna tabla</h2>${toggle}</div>
-      <div class="grid gauges">${eaqiGaugeHtml(r.air_quality)}${gauges}${motion ? cardHtml(motion) : ''}</div>
+    const byKey = Object.fromEntries(r.metrics.map((m) => [m.key, m]));
+    const sections = GAUGE_GROUPS.map((grp) => {
+      const items = grp.keys.map((k) => {
+        if (k === 'air_quality_level') return eaqiGaugeHtml(r.air_quality);
+        const m = byKey[k];
+        if (!m) return '';
+        return GAUGES[k] ? gaugeHtml(m) : cardHtml(m);
+      }).join('');
+      return `<section class="g-section"><h3>${esc(grp.title)}</h3><div class="grid gauges">${items}</div></section>`;
+    }).join('');
+    main.innerHTML = `<div class="page-head"><h2>Kontrolna tabla</h2>
+        <div class="actions"><label class="check small"><input type="checkbox" id="needles" ${getNeedles() ? 'checked' : ''}> Kazaljke</label>${toggle}</div></div>
+      ${sections}
       <p class="muted small">Boje zona: PM2.5, PM10 i nivo kvaliteta vazduha prema EAQI (lokalna procena), UV indeks prema skali WHO.
         Ostali instrumenti nemaju pragove. Gasni otpor i osvetljenost su na logaritamskoj skali.</p>`;
     bindToggle();
+    $('#needles').onchange = (ev) => { setNeedles(ev.target.checked); pageDashboard(main); };
     return;
   }
   const aq = r.air_quality;
@@ -596,6 +644,56 @@ function resourceBar(title, pct, detail, invert = false) {
       <span style="width:${p.toFixed(1)}%"></span></div></div>`;
 }
 
+async function pageMqtt(main) {
+  const q = await api('/mqtt');
+  const conn = !q.enabled ? '<span class="badge">isključen</span>'
+    : q.connected ? '<span class="badge ok">povezan</span>'
+      : `<span class="badge crit">nije povezan</span>${q.error ? ` <span class="small muted">(${esc(q.error)})</span>` : ''}`;
+  main.innerHTML = `<h2>MQTT</h2>
+    <div class="panel"><h3>Status</h3><table>
+      <tr><td class="k">Veza</td><td>${conn}</td></tr>
+      <tr><td class="k">Broker</td><td>${q.host ? esc(q.host) + ':' + q.port : '--'}</td></tr>
+      <tr><td class="k">Topic stanja (JSON)</td><td><code>${esc(q.state_topic)}</code></td></tr>
+      <tr><td class="k">Availability (LWT)</td><td><code>${esc(q.availability_topic)}</code> -- online / offline</td></tr>
+      <tr><td class="k">Pojedinačni topic-i</td><td><code>${esc(q.base_topic)}/temperature</code>, <code>…/pm2_5</code>, …</td></tr>
+      <tr><td class="k">Objava</td><td>${q.publish_count} objava${q.publish_count ? ', poslednja ' + ago(q.last_publish_age_s) : ''} · povezivanja: ${q.connect_count}</td></tr>
+      <tr><td class="k">Home Assistant Discovery</td><td>${q.discovery ? `uključen (prefiks <code>${esc(q.discovery_prefix)}</code>)` : 'isključen'}</td></tr>
+    </table></div>
+    <div class="panel"><h3>Podešavanja</h3>
+      <form class="settings" id="mqtt-form">
+        <label class="check"><input type="checkbox" name="enabled" ${q.enabled ? 'checked' : ''}> MQTT uključen</label>
+        <label>Adresa brokera (IP ili naziv)<input name="host" maxlength="63" value="${esc(q.host)}" placeholder="npr. 192.168.88.10 ili homeassistant.local"></label>
+        <label>Port<input name="port" type="number" min="1" max="65535" value="${q.port}"></label>
+        <label>Korisničko ime<input name="username" maxlength="32" value="${esc(q.username)}" autocomplete="off"></label>
+        <label>Lozinka<input name="password" type="password" maxlength="64" autocomplete="new-password"
+          placeholder="${q.password_set ? 'ostaviti prazno za postojeću lozinku' : ''}"></label>
+        <label>Client ID<input name="client_id" maxlength="32" value="${esc(q.client_id)}"></label>
+        <label>Osnovni topic<input name="base_topic" maxlength="63" value="${esc(q.base_topic)}"></label>
+        <label>Interval objavljivanja (s)<input name="interval_s" type="number" min="5" max="300" value="${q.interval_s}"></label>
+        <label>QoS<select name="qos"><option value="0" ${q.qos === 0 ? 'selected' : ''}>0 -- najviše jednom</option>
+          <option value="1" ${q.qos === 1 ? 'selected' : ''}>1 -- najmanje jednom</option></select></label>
+        <label class="check"><input type="checkbox" name="discovery" ${q.discovery ? 'checked' : ''}> Home Assistant MQTT Discovery</label>
+        <label>Discovery prefiks<input name="discovery_prefix" maxlength="31" value="${esc(q.discovery_prefix)}"></label>
+        <p class="muted small">TLS veza još nije podržana; koristiti broker u lokalnoj mreži (port 1883).</p>
+        <div class="row-end"><button class="btn" type="submit">Sačuvaj</button></div>
+      </form>
+    </div>`;
+  const f = $('#mqtt-form');
+  f.onsubmit = async (ev) => {
+    ev.preventDefault();
+    const body = {
+      enabled: f.enabled.checked, host: f.host.value.trim(), port: Number(f.port.value), username: f.username.value.trim(),
+      client_id: f.client_id.value.trim(), base_topic: f.base_topic.value.trim(), interval_s: Number(f.interval_s.value),
+      qos: Number(f.qos.value), discovery: f.discovery.checked, discovery_prefix: f.discovery_prefix.value.trim(),
+    };
+    if (f.password.value) body.password = f.password.value;
+    try {
+      banner((await adminApi('/mqtt', body)).message);
+      setTimeout(() => { if (state.page === 'mqtt') pageMqtt(main); }, 4000);
+    } catch (e) { banner(e.message, true); }
+  };
+}
+
 async function pageSystem(main) {
   const s = await api('/system');
   const heapUsed = s.heap_total - s.heap_free;
@@ -665,7 +763,7 @@ const PAGES = {
   istorija: { render: pageLater('Istorija') },
   statistika: { render: pageLater('Statistika') },
   senzori: { render: pageSensors, refreshMs: 5000 },
-  mqtt: { render: pageLater('MQTT') },
+  mqtt: { render: pageMqtt },
   wifi: { render: pageWifi },
   podesavanja: { render: pageSettings },
   alarmi: { render: pageLater('Alarmiranje') },

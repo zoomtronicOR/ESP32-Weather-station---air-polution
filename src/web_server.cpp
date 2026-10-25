@@ -15,6 +15,7 @@
 #include "i2c_bus.h"
 #include "log.h"
 #include "metrics.h"
+#include "mqtt_manager.h"
 #include "pins.h"
 #include "sensor_manager.h"
 #include "status_led.h"
@@ -39,6 +40,7 @@ enum Action : uint32_t {
     ACT_PORTAL = 1 << 4,
     ACT_RESTART = 1 << 5,
     ACT_DISPLAY = 1 << 6,
+    ACT_MQTT_RESTART = 1 << 7,
 };
 
 static SemaphoreHandle_t s_mutex = nullptr;
@@ -80,6 +82,7 @@ void update(uint32_t now) {
         status_led::setEnabled(config_manager::get().statusLedEnabled);
     }
     if (actions & ACT_SET_TIME) time_manager::setManual(epoch);
+    if (actions & ACT_MQTT_RESTART) mqtt_manager::restart();
     if (actions & ACT_WIFI_RECONNECT) wifi_manager::reconnect(now);
     if (actions & ACT_PORTAL) wifi_manager::startPortal(now);
     if (actions & ACT_RESTART) s_restartAtMs = now + 1000;  // odgovor stigne do pregledača pre restarta
@@ -238,6 +241,9 @@ static void handleStatus(AsyncWebServerRequest *req) {
 
     doc["status_led"] = status_led::describe(status_led::current());
     doc["admin_password_set"] = config_manager::adminPasswordSet();
+    JsonObject mq = doc["mqtt"].to<JsonObject>();
+    mq["enabled"] = mqtt_manager::enabled();
+    mq["connected"] = mqtt_manager::connected();
     sendJson(req, doc);
 }
 
@@ -491,6 +497,43 @@ static void handleConfig(AsyncWebServerRequest *req) {
     sendJson(req, doc);
 }
 
+static void handleMqtt(AsyncWebServerRequest *req) {
+    const DeviceConfig &cfg = config_manager::get();
+    JsonDocument doc;
+    doc["enabled"] = cfg.mqttEnabled;
+    doc["connected"] = mqtt_manager::connected();
+    doc["error"] = mqtt_manager::lastError();
+    doc["host"] = cfg.mqttHost;
+    doc["port"] = cfg.mqttPort;
+    doc["username"] = cfg.mqttUser;
+    doc["password_set"] = cfg.mqttPass[0] != '\0';  // lozinka se ne vraća (specifikacija §8.1)
+    doc["client_id"] = cfg.mqttClientId;
+    doc["base_topic"] = cfg.mqttBaseTopic;
+    doc["interval_s"] = cfg.mqttIntervalS;
+    doc["qos"] = cfg.mqttQos;
+    doc["discovery"] = cfg.mqttDiscovery;
+    doc["discovery_prefix"] = cfg.mqttDiscoveryPrefix;
+    doc["tls_supported"] = false;
+    doc["publish_count"] = mqtt_manager::publishCount();
+    doc["last_publish_age_s"] = mqtt_manager::lastPublishAgeS();
+    doc["connect_count"] = mqtt_manager::connectCount();
+    char buf[96];
+    snprintf(buf, sizeof(buf), "%s/availability", cfg.mqttBaseTopic);
+    doc["availability_topic"] = buf;
+    snprintf(buf, sizeof(buf), "%s/state", cfg.mqttBaseTopic);
+    doc["state_topic"] = buf;
+    sendJson(req, doc);
+}
+
+static bool validTopic(const char *t, size_t maxLen) {
+    size_t n = strlen(t);
+    if (n == 0 || n > maxLen || t[0] == '/' || t[n - 1] == '/') return false;
+    for (const char *p = t; *p; p++) {
+        if (*p == '+' || *p == '#' || *p == ' ') return false;  // bez džokera i razmaka
+    }
+    return true;
+}
+
 static void handleSystem(AsyncWebServerRequest *req) {
     JsonDocument doc;
     doc["device"] = DEVICE_NAME;
@@ -654,6 +697,73 @@ static void handleConfigPost(AsyncWebServerRequest *req, JsonVariant &json) {
     sendOk(req, "Podešavanja su sačuvana.");
 }
 
+static void handleMqttPost(AsyncWebServerRequest *req, JsonVariant &json) {
+    if (!requireAuth(req)) return;
+
+    if (!lock()) return sendError(req, 503, "Uređaj je zauzet, pokušajte ponovo.");
+    DeviceConfig cfg = pendingConfig();
+    unlock();
+
+    if (json["enabled"].is<bool>()) cfg.mqttEnabled = json["enabled"];
+    const char *host = json["host"] | (const char *)nullptr;
+    if (host) {
+        if (strlen(host) > 63 || strchr(host, ' ') || strchr(host, '/')) {
+            return sendError(req, 400, "Neispravna adresa brokera (IP adresa ili naziv, bez razmaka i kosih crta).");
+        }
+        strlcpy(cfg.mqttHost, host, sizeof(cfg.mqttHost));
+    }
+    if (json["port"].is<int>()) {
+        int port = json["port"];
+        if (port < 1 || port > 65535) return sendError(req, 400, "Port mora biti 1--65535.");
+        cfg.mqttPort = port;
+    }
+    const char *user = json["username"] | (const char *)nullptr;
+    if (user) {
+        if (strlen(user) > 32) return sendError(req, 400, "Korisničko ime može imati najviše 32 znaka.");
+        strlcpy(cfg.mqttUser, user, sizeof(cfg.mqttUser));
+    }
+    const char *pass = json["password"] | (const char *)nullptr;  // izostavljena lozinka = ostaje ista
+    if (pass) {
+        if (strlen(pass) > 64) return sendError(req, 400, "Lozinka može imati najviše 64 znaka.");
+        strlcpy(cfg.mqttPass, pass, sizeof(cfg.mqttPass));
+    }
+    const char *cid = json["client_id"] | (const char *)nullptr;
+    if (cid) {
+        if (strlen(cid) == 0 || strlen(cid) > 32) return sendError(req, 400, "Client ID mora imati 1--32 znaka.");
+        strlcpy(cfg.mqttClientId, cid, sizeof(cfg.mqttClientId));
+    }
+    const char *base = json["base_topic"] | (const char *)nullptr;
+    if (base) {
+        if (!validTopic(base, 63)) return sendError(req, 400, "Neispravan osnovni topic (bez +, #, razmaka i kose crte na krajevima).");
+        strlcpy(cfg.mqttBaseTopic, base, sizeof(cfg.mqttBaseTopic));
+    }
+    if (json["interval_s"].is<int>()) {
+        int v = json["interval_s"];
+        if (v < 5 || v > 300) return sendError(req, 400, "Interval objavljivanja mora biti 5--300 s.");
+        cfg.mqttIntervalS = v;
+    }
+    if (json["qos"].is<int>()) {
+        int q = json["qos"];
+        if (q < 0 || q > 1) return sendError(req, 400, "QoS mora biti 0 ili 1.");
+        cfg.mqttQos = q;
+    }
+    if (json["discovery"].is<bool>()) cfg.mqttDiscovery = json["discovery"];
+    const char *prefix = json["discovery_prefix"] | (const char *)nullptr;
+    if (prefix) {
+        if (!validTopic(prefix, 31)) return sendError(req, 400, "Neispravan Discovery prefiks.");
+        strlcpy(cfg.mqttDiscoveryPrefix, prefix, sizeof(cfg.mqttDiscoveryPrefix));
+    }
+    if (cfg.mqttEnabled && cfg.mqttHost[0] == '\0') {
+        return sendError(req, 400, "Za uključivanje MQTT-a potrebna je adresa brokera.");
+    }
+
+    if (!lock()) return sendError(req, 503, "Uređaj je zauzet, pokušajte ponovo.");
+    pendingConfig() = cfg;
+    s_pending |= ACT_MQTT_RESTART;
+    unlock();
+    sendOk(req, cfg.mqttEnabled ? "MQTT podešavanja su sačuvana. Povezivanje na broker..." : "MQTT je isključen.");
+}
+
 static void handleTimePost(AsyncWebServerRequest *req, JsonVariant &json) {
     if (!requireAuth(req)) return;
     if (!json["epoch"].is<int64_t>()) return sendError(req, 400, "Nedostaje vreme (epoch).");
@@ -701,6 +811,8 @@ void begin() {
     s_server.on("/api/v1/wifi", HTTP_GET, handleWifi);
     s_server.on("/api/v1/config", HTTP_GET, handleConfig);
     s_server.on("/api/v1/system", HTTP_GET, handleSystem);
+    s_server.on("/api/v1/mqtt", HTTP_GET, handleMqtt);
+    s_server.on("/api/v1/mqtt", HTTP_POST, handleMqttPost);
 
     s_server.on("/api/v1/wifi", HTTP_POST, handleWifiPost);
     s_server.on("/api/v1/config", HTTP_POST, handleConfigPost);

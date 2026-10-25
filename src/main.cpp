@@ -12,6 +12,7 @@
 #include "i2c_bus.h"
 #include "log.h"
 #include "metrics.h"
+#include "mqtt_manager.h"
 #include "pins.h"
 #include "sensor_manager.h"
 #include "status_led.h"
@@ -66,6 +67,8 @@ static void updateStatusLed(uint32_t now) {
         pattern = Pattern::SensorFault;
     } else if (!wifi_manager::connected()) {
         pattern = Pattern::NoWifi;
+    } else if (mqtt_manager::enabled() && !mqtt_manager::connected()) {
+        pattern = Pattern::NoMqtt;
     } else if (h.initializing > 0) {
         pattern = Pattern::Warmup;
     } else {
@@ -174,11 +177,15 @@ void loop() {
 
     wifi_manager::update(now);
     time_manager::update(now, wifi_manager::connected());
+    mqtt_manager::update(now, wifi_manager::connected());
     web_server::update(now);
 
     if (now - s_lastConnInfoMs >= 500) {
         s_lastConnInfoMs = now;
-        display_manager::setConnectionInfo(wifi_manager::connectionInfo(), now);
+        ConnectionInfo info = wifi_manager::connectionInfo();
+        info.mqttEnabled = mqtt_manager::enabled();
+        info.mqttConnected = mqtt_manager::connected();
+        display_manager::setConnectionInfo(info, now);
     }
     display_manager::update(now);
     handleBootButton(now);

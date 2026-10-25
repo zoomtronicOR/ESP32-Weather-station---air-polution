@@ -66,6 +66,17 @@ void begin() {
     loadString(p, "tz", s_config.timezone, sizeof(s_config.timezone));
     s_config.oledBrightness = p.getUChar("oledbr", 80);
     s_config.statusLedEnabled = p.getBool("sled", true);
+    s_config.mqttEnabled = p.getBool("mqtt", false);
+    loadString(p, "mhost", s_config.mqttHost, sizeof(s_config.mqttHost));
+    s_config.mqttPort = p.getUShort("mport", 1883);
+    loadString(p, "muser", s_config.mqttUser, sizeof(s_config.mqttUser));
+    loadString(p, "mpass", s_config.mqttPass, sizeof(s_config.mqttPass));
+    loadString(p, "mcid", s_config.mqttClientId, sizeof(s_config.mqttClientId));
+    loadString(p, "mbase", s_config.mqttBaseTopic, sizeof(s_config.mqttBaseTopic));
+    s_config.mqttIntervalS = p.getUShort("mint", 10);
+    s_config.mqttQos = p.getUChar("mqos", 0);
+    s_config.mqttDiscovery = p.getBool("mdisc", true);
+    loadString(p, "mdpre", s_config.mqttDiscoveryPrefix, sizeof(s_config.mqttDiscoveryPrefix));
     p.end();
 
     // Oporavak od neispravnih vrednosti (specifikacija §17)
@@ -77,6 +88,12 @@ void begin() {
     }
     if (s_config.oledBrightness > 100) {
         s_config.oledBrightness = 80;
+    }
+    if (s_config.mqttIntervalS < 5 || s_config.mqttIntervalS > 300) {
+        s_config.mqttIntervalS = 10;
+    }
+    if (s_config.mqttQos > 1) {
+        s_config.mqttQos = 0;
     }
     LOG_I(TAG, "Konfiguracija učitana (Wi-Fi mreža: %s)", s_config.wifiSsid[0] ? s_config.wifiSsid : "nije podešena");
 }
@@ -110,6 +127,17 @@ bool save() {
     p.putString("tz", s_config.timezone);
     p.putUChar("oledbr", s_config.oledBrightness);
     p.putBool("sled", s_config.statusLedEnabled);
+    p.putBool("mqtt", s_config.mqttEnabled);
+    p.putString("mhost", s_config.mqttHost);
+    p.putUShort("mport", s_config.mqttPort);
+    p.putString("muser", s_config.mqttUser);
+    p.putString("mpass", s_config.mqttPass);
+    p.putString("mcid", s_config.mqttClientId);
+    p.putString("mbase", s_config.mqttBaseTopic);
+    p.putUShort("mint", s_config.mqttIntervalS);
+    p.putUChar("mqos", s_config.mqttQos);
+    p.putBool("mdisc", s_config.mqttDiscovery);
+    p.putString("mdpre", s_config.mqttDiscoveryPrefix);
     p.end();
     LOG_I(TAG, "Konfiguracija sačuvana");
     return true;
