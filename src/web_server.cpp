@@ -9,6 +9,7 @@
 
 #include "air_quality.h"
 #include "alarm_manager.h"
+#include "led_manager.h"
 #include "logger.h"
 #include "config.h"
 #include "config_manager.h"
@@ -53,6 +54,7 @@ enum Action : uint32_t {
     ACT_ALARM_ACK = 1 << 12,
     ACT_ALARM_CLEAR = 1 << 13,
     ACT_LOG_LEVEL = 1 << 14,
+    ACT_LED = 1 << 15,
 };
 
 static SemaphoreHandle_t s_mutex = nullptr;
@@ -148,6 +150,7 @@ void update(uint32_t now) {
     if (actions & ACT_ALARM_ACK) alarm_manager::acknowledge(s_pendingAckIdx);
     if (actions & ACT_ALARM_CLEAR) alarm_manager::clearEvents();
     if (actions & ACT_LOG_LEVEL) logger::setLevel(config_manager::get().logLevel);
+    if (actions & ACT_LED) led_manager::applyConfig();
     if (actions & ACT_FACTORY_RESET) {
         LOG_W(TAG, "Vraćanje na fabrička podešavanja na zahtev iz web interfejsa");
         bool sent = removeFromHa && mqtt_manager::removeFromHomeAssistant();
@@ -508,8 +511,10 @@ static void handleSensors(AsyncWebServerRequest *req) {
     ws["interface"] = "RMT";
     addPin(ws["pins"].to<JsonArray>(), "DIN", PIN_WS2812B);
     ws["supply_v"] = 5.0;
-    ws["status"] = "disabled";
-    ws["status_text"] = "nije povezan";
+    // Prisustvo WS2812B se ne može detektovati; prikazuje se da li je uključen u podešavanjima
+    bool ledOn = config_manager::get().ledEnabled;
+    ws["status"] = ledOn ? "ok" : "disabled";
+    ws["status_text"] = ledOn ? "uključen" : "isključen u podešavanjima";
 
     // Upozorenje o pull-up otpornicima
     JsonObject buses = doc["buses"].to<JsonObject>();
@@ -1073,6 +1078,81 @@ static void handleLogLevel(AsyncWebServerRequest *req, JsonVariant &json) {
     sendOk(req, "Nivo logovanja je promenjen.");
 }
 
+// ---------------------------------------------------------------------------
+// WS2812B LED indikator (specifikacija §10A.5)
+// ---------------------------------------------------------------------------
+
+static void handleLed(AsyncWebServerRequest *req) {
+    const DeviceConfig &c = config_manager::get();
+    JsonDocument doc;
+    doc["enabled"] = c.ledEnabled;
+    doc["count"] = c.ledCount;
+    doc["brightness"] = c.ledBrightness;
+    doc["mode"] = c.ledMode == 1 ? "bar" : "all";
+    doc["source"] = c.ledSource == 1 ? "pm2_5" : (c.ledSource == 2 ? "pm10" : "worst");
+    doc["alarm_pulse"] = c.ledAlarmPulse;
+    doc["auto_brightness"] = c.ledAutoBrightness;
+    doc["night_enabled"] = c.ledNightEnabled;
+    doc["night_start"] = c.ledNightStart;
+    doc["night_end"] = c.ledNightEnd;
+    doc["night_brightness"] = c.ledNightBrightness;
+    doc["state"] = led_manager::stateKey(led_manager::state());
+    doc["night_active"] = led_manager::nightActive();
+    doc["effective_brightness"] = led_manager::effectiveBrightness();
+    doc["level"] = led_manager::level();
+    doc["level_name"] = air_quality::levelName(led_manager::level());
+    char hex[8];
+    snprintf(hex, sizeof(hex), "#%06lX", (unsigned long)led_manager::currentColor());
+    doc["color"] = hex;
+    doc["pin"] = PIN_WS2812B;
+    sendJson(req, doc);
+}
+
+static void handleLedPost(AsyncWebServerRequest *req, JsonVariant &json) {
+    if (!requireAuth(req)) return;
+    if (!lock()) return sendError(req, 503, "Uređaj je zauzet, pokušajte ponovo.");
+    DeviceConfig cfg = pendingConfig();
+    unlock();
+    auto pct = [&](const char *key, uint8_t &dst) -> bool {
+        if (!json[key].is<int>()) return true;
+        int v = json[key];
+        if (v < 0 || v > 100) return false;
+        dst = v;
+        return true;
+    };
+    auto hour = [&](const char *key, uint8_t &dst) -> bool {
+        if (!json[key].is<int>()) return true;
+        int v = json[key];
+        if (v < 0 || v > 23) return false;
+        dst = v;
+        return true;
+    };
+    if (json["enabled"].is<bool>()) cfg.ledEnabled = json["enabled"];
+    if (json["count"].is<int>()) {
+        int n = json["count"];
+        if (n < 1 || n > LED_MAX_COUNT) return sendError(req, 400, "Broj dioda mora biti 1-16.");
+        cfg.ledCount = n;
+    }
+    if (!pct("brightness", cfg.ledBrightness) || !pct("night_brightness", cfg.ledNightBrightness)) {
+        return sendError(req, 400, "Osvetljenje mora biti 0-100 %.");
+    }
+    if (!hour("night_start", cfg.ledNightStart) || !hour("night_end", cfg.ledNightEnd)) {
+        return sendError(req, 400, "Sat mora biti 0-23.");
+    }
+    const char *mode = json["mode"] | (const char *)nullptr;
+    if (mode) cfg.ledMode = strcmp(mode, "bar") == 0 ? 1 : 0;
+    const char *src = json["source"] | (const char *)nullptr;
+    if (src) cfg.ledSource = strcmp(src, "pm2_5") == 0 ? 1 : (strcmp(src, "pm10") == 0 ? 2 : 0);
+    if (json["alarm_pulse"].is<bool>()) cfg.ledAlarmPulse = json["alarm_pulse"];
+    if (json["auto_brightness"].is<bool>()) cfg.ledAutoBrightness = json["auto_brightness"];
+    if (json["night_enabled"].is<bool>()) cfg.ledNightEnabled = json["night_enabled"];
+    if (!lock()) return sendError(req, 503, "Uređaj je zauzet, pokušajte ponovo.");
+    pendingConfig() = cfg;
+    s_pending |= ACT_LED;
+    unlock();
+    sendOk(req, cfg.ledEnabled ? "LED indikator je podešen." : "LED indikator je isključen.");
+}
+
 static void handleTimePost(AsyncWebServerRequest *req, JsonVariant &json) {
     if (!requireAuth(req)) return;
     if (!json["epoch"].is<int64_t>()) return sendError(req, 400, "Nedostaje vreme (epoch).");
@@ -1134,6 +1214,8 @@ void begin() {
     s_server.on("/api/v1/alarms", HTTP_POST, handleAlarmsPost);
     s_server.on("/api/v1/logs/level", HTTP_POST, handleLogLevel);
     s_server.on("/api/v1/logs", HTTP_GET, handleLogs);
+    s_server.on("/api/v1/led", HTTP_GET, handleLed);
+    s_server.on("/api/v1/led", HTTP_POST, handleLedPost);
     s_server.on("/api/v1/history/clear", HTTP_POST, [](AsyncWebServerRequest *req) {
         handleAction(req, ACT_HISTORY_CLEAR, "Istorija je obrisana.");
     });

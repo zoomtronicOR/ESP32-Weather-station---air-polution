@@ -6,6 +6,7 @@
 
 #include "air_quality.h"
 #include "alarm_manager.h"
+#include "led_manager.h"
 #include "logger.h"
 #include "config.h"
 #include "config_manager.h"
@@ -177,6 +178,7 @@ void setup() {
     pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
     storage_manager::begin();  // LittleFS i fajlovi istorije
     alarm_manager::begin();
+    led_manager::begin();
     wifi_manager::begin(millis());
     web_server::begin();  // posle Wi-Fi-ja, jer mrežni sloj mora biti pokrenut
     ota_manager::begin();
@@ -192,6 +194,7 @@ void loop() {
     air_quality::update(now);
     storage_manager::update(now);
     alarm_manager::update(now);
+    led_manager::update(now);
 
     wifi_manager::update(now);
     time_manager::update(now, wifi_manager::connected());

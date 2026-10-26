@@ -31,6 +31,7 @@ static uint8_t s_candidate = 0;
 static uint32_t s_candidateSinceMs = 0;
 static MetricId s_dominant = MetricId::Pm2_5;
 static float s_dominantAvg = NAN;
+static uint8_t s_level25 = 0, s_level10 = 0;
 
 static uint8_t levelFor(float value, const float *limits) {
     uint8_t lvl = 1;
@@ -58,6 +59,7 @@ void update(uint32_t now) {
             LOG_W(TAG, "Nema svežih PM merenja -- nivo kvaliteta vazduha je nepoznat");
         }
         s_level = 0;
+        s_level25 = s_level10 = 0;
         s_candidate = 0;
         s_count = 0;
         metrics::invalidate(MetricId::AirQualityLevel, ErrorCode::Warmup);
@@ -79,6 +81,8 @@ void update(uint32_t now) {
 
     uint8_t lvl25 = levelFor(avg25, PM25_LIMITS);
     uint8_t lvl10 = levelFor(avg10, PM10_LIMITS);
+    s_level25 = lvl25;
+    s_level10 = lvl10;
     uint8_t newLevel = lvl25 >= lvl10 ? lvl25 : lvl10;
     s_dominant = lvl25 >= lvl10 ? MetricId::Pm2_5 : MetricId::Pm10;
     s_dominantAvg = lvl25 >= lvl10 ? avg25 : avg10;
@@ -118,6 +122,8 @@ const char *levelName(uint8_t lvl) {
 }
 
 MetricId dominant() { return s_dominant; }
+
+uint8_t levelOf(MetricId pollutant) { return pollutant == MetricId::Pm10 ? s_level10 : s_level25; }
 
 float dominantAverage() { return s_dominantAvg; }
 

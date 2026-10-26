@@ -42,6 +42,19 @@ struct DeviceConfig {
     uint8_t oledBrightness = 80;  // 0–100 %; 0 = ekran isključen
     bool statusLedEnabled = true; // plava LED na ploči (kod treptanja, specifikacija §16.1)
 
+    // WS2812B LED indikator kvaliteta vazduha (specifikacija §10A)
+    bool ledEnabled = false;      // isključen dok dioda nije povezana
+    uint8_t ledCount = 1;         // 1–16
+    uint8_t ledBrightness = 30;   // 0–100 %
+    uint8_t ledMode = 0;          // 0 = sve diode istom bojom, 1 = bar-prikaz
+    uint8_t ledSource = 0;        // 0 = lošiji od PM2.5/PM10, 1 = PM2.5, 2 = PM10
+    bool ledAlarmPulse = true;    // pulsiranje od nivoa 4 (Loš)
+    bool ledAutoBrightness = false;  // prema osvetljenosti (LTR-390)
+    bool ledNightEnabled = true;
+    uint8_t ledNightStart = 22;   // sat (lokalno vreme)
+    uint8_t ledNightEnd = 7;
+    uint8_t ledNightBrightness = 5;  // %; 0 = isključena noću
+
     // Dijagnostika
     uint8_t logLevel = 2;         // 0 = ERROR ... 3 = DEBUG (specifikacija §16)
 };

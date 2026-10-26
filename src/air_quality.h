@@ -17,6 +17,8 @@ const char *levelName(uint8_t level);
 
 // Zagađivač koji određuje nivo (PM2.5 ili PM10) i njegov klizni prosek
 MetricId dominant();
+// Nivo samo za PM2.5 ili PM10 (klizni prosek, bez histereze); 0 = nepoznato
+uint8_t levelOf(MetricId pollutant);
 float dominantAverage();
 
 }  // namespace air_quality

@@ -567,7 +567,7 @@ async function scanNetworks(form) {
 }
 
 async function pageSettings(main) {
-  const [c, t] = await Promise.all([api('/config'), api('/time')]);
+  const [c, t, led] = await Promise.all([api('/config'), api('/time'), api('/led')]);
   main.innerHTML = `<h2>Podešavanja</h2>
     <div class="panel"><h3>Prikaz</h3>
       <form class="settings" id="display-form">
@@ -578,6 +578,33 @@ async function pageSettings(main) {
           Statusna LED dioda na ploči uključena</label>
         <p class="muted small">Plava LED kodom treptanja pokazuje stanje uređaja (1 bljesak / 2 s = sve ispravno).
           Kada je isključena, stanje se i dalje vidi na stranici Sistem.</p>
+      </form>
+    </div>
+    <div class="panel"><h3>LED indikator kvaliteta vazduha (WS2812B)</h3>
+      <form class="settings" id="led-form">
+        <label class="check"><input type="checkbox" name="enabled" ${led.enabled ? 'checked' : ''}> <b>LED indikator uključen</b></label>
+        <p class="small" id="led-status"></p>
+        <label>Broj dioda<input type="number" name="count" min="1" max="16" value="${led.count}"></label>
+        <label><span>Osvetljenje: <b id="led-br-val">${led.brightness} %</b></span>
+          <input type="range" name="brightness" min="0" max="100" step="5" value="${led.brightness}"></label>
+        <label>Prikaz<select name="mode">
+          <option value="all" ${led.mode === 'all' ? 'selected' : ''}>sve diode istom bojom</option>
+          <option value="bar" ${led.mode === 'bar' ? 'selected' : ''}>bar-prikaz (broj dioda prema nivou)</option></select></label>
+        <label>Izvor<select name="source">
+          <option value="worst" ${led.source === 'worst' ? 'selected' : ''}>lošiji od PM2.5 i PM10 (EAQI)</option>
+          <option value="pm2_5" ${led.source === 'pm2_5' ? 'selected' : ''}>samo PM2.5</option>
+          <option value="pm10" ${led.source === 'pm10' ? 'selected' : ''}>samo PM10</option></select></label>
+        <label class="check"><input type="checkbox" name="alarm_pulse" ${led.alarm_pulse ? 'checked' : ''}> Pulsiranje od nivoa "Loš" (4/6)</label>
+        <label class="check"><input type="checkbox" name="auto_brightness" ${led.auto_brightness ? 'checked' : ''}> Osvetljenje prema svetlu u prostoriji (LTR-390)</label>
+        <label class="check"><input type="checkbox" name="night_enabled" ${led.night_enabled ? 'checked' : ''}> Noćni režim (radi samo kada je vreme sinhronizovano)</label>
+        <div class="toolbar">
+          <label class="inline">od <input type="number" name="night_start" min="0" max="23" value="${led.night_start}" class="num"> h</label>
+          <label class="inline">do <input type="number" name="night_end" min="0" max="23" value="${led.night_end}" class="num"> h</label>
+          <label class="inline">osvetljenje noću <input type="number" name="night_brightness" min="0" max="100" value="${led.night_brightness}" class="num"> %</label>
+        </div>
+        <p class="muted small">Dioda se povezuje na ${'GPIO' + led.pin} (P${led.pin}), napajanje 5 V. Ukupna struja je softverski ograničena.
+          Boje prate EAQI nivoe; bez validnog PM merenja dioda nikada ne prikazuje boju "dobrog" vazduha.</p>
+        <div class="row-end"><button class="btn" type="submit">Sačuvaj</button></div>
       </form>
     </div>
     <div class="panel"><h3>Vreme i NTP</h3>
@@ -627,6 +654,36 @@ async function pageSettings(main) {
       banner(e.message, true);
     }
   };
+
+  // LED indikator
+  const lf = $('#led-form');
+  const ledStateText = { off: 'isključen', boot_test: 'test boja', level: 'prikazuje nivo', warmup: 'zagrevanje SPS30',
+    sensor_fault: 'nema validnog PM merenja', portal: 'konfiguracioni portal', ota: 'ažuriranje' };
+  const showLedStatus = (l) => {
+    $('#led-status').innerHTML = l.enabled
+      ? `Stanje: <b>${esc(ledStateText[l.state] || l.state)}</b>${l.state === 'level' ? ` - ${esc(l.level_name)}` : ''}
+         <span class="swatch" style="background:${esc(l.color)};margin-left:8px"></span> ·
+         stvarno osvetljenje ${l.effective_brightness} %${l.night_active ? ' (noćni režim)' : ''}`
+      : '<span class="muted">Indikator je isključen.</span>';
+  };
+  showLedStatus(led);
+  const ledBody = () => ({
+    enabled: lf.enabled.checked, count: Number(lf.count.value), brightness: Number(lf.brightness.value),
+    mode: lf.mode.value, source: lf.source.value, alarm_pulse: lf.alarm_pulse.checked,
+    auto_brightness: lf.auto_brightness.checked, night_enabled: lf.night_enabled.checked,
+    night_start: Number(lf.night_start.value), night_end: Number(lf.night_end.value),
+    night_brightness: Number(lf.night_brightness.value),
+  });
+  const saveLed = async (body) => {
+    try {
+      banner((await adminApi('/led', body)).message);
+      setTimeout(async () => { try { showLedStatus(await api('/led')); } catch (e) { /* ignorisati */ } }, 800);
+    } catch (e) { banner(e.message, true); }
+  };
+  // Uključivanje i isključivanje se primenjuje odmah
+  lf.enabled.onchange = () => saveLed({ enabled: lf.enabled.checked });
+  lf.brightness.oninput = () => { $('#led-br-val').textContent = lf.brightness.value + ' %'; };
+  lf.onsubmit = (ev) => { ev.preventDefault(); saveLed(ledBody()); };
 
   const tf = $('#time-form');
   tf.onsubmit = async (ev) => {

@@ -3,7 +3,7 @@
 // Osnovni parametri firmware-a
 
 #define DEVICE_NAME       "esp32_r201"
-#define FW_VERSION        "0.7.2"
+#define FW_VERSION        "0.8.0"
 
 #define SERIAL_BAUD       115200
 
@@ -76,6 +76,13 @@
 // Alarmi (specifikacija §11)
 #define ALARM_EVAL_MS           1000    // provera pragova
 #define ALARM_EVENTS_MAX        100     // događaji u fajlu /hist/alarms.bin
+
+// WS2812B LED indikator (specifikacija §10A)
+#define LED_MAX_COUNT           16
+#define LED_FRAME_MS            30      // osvežavanje animacija
+#define LED_FADE_MS             1000    // prelaz između boja
+#define LED_CURRENT_LIMIT_MA    400     // softversko ograničenje ukupne struje
+#define LED_MA_PER_CHANNEL      20      // ~20 mA po kanalu (R/G/B) pri punoj jačini
 
 // OTA (specifikacija §15)
 #define OTA_VERIFY_MS           60000   // novi firmware se potvrđuje posle 60 s stabilnog rada

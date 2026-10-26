@@ -8,6 +8,7 @@
 #include "alarm_manager.h"
 #include "config.h"
 #include "config_manager.h"
+#include "led_manager.h"
 #include "log.h"
 #include "metrics.h"
 #include "ota_manager.h"
@@ -29,6 +30,13 @@ static volatile int s_lastErrorCode = 0;
 static volatile bool s_restartCommand = false;
 static uint32_t s_restartAtMs = 0;
 static char s_restartTopic[96];
+static char s_ledSetTopic[96];
+static volatile bool s_ledCommand = false;
+static volatile bool s_ledCmdOn = false;
+static volatile int s_ledCmdBrightness = -1;
+static bool s_ledStateKnown = false;
+static bool s_ledLastOn = false;
+static uint8_t s_ledLastBrightness = 0;
 
 static char s_uri[96];
 static char s_lwtTopic[80];
@@ -190,6 +198,28 @@ static void publishDiscovery() {
     serializeJson(btn, payload);
     publish(topic, payload.c_str(), 1, true);
 
+    // LED indikator kao light entitet (JSON šema): uključivanje i osvetljenje (specifikacija §10A.5)
+    {
+        char uid[80], ltopic[160], st[128];
+        deviceId(id, sizeof(id));
+        snprintf(uid, sizeof(uid), "%s_led", id);
+        snprintf(ltopic, sizeof(ltopic), "%s/light/%s/led/config", cfg.mqttDiscoveryPrefix, id);
+        snprintf(st, sizeof(st), "%s/led/state", cfg.mqttBaseTopic);
+        JsonDocument ld;
+        ld["name"] = "LED indikator";
+        ld["unique_id"] = uid;
+        ld["schema"] = "json";
+        ld["command_topic"] = s_ledSetTopic;
+        ld["state_topic"] = st;
+        ld["brightness"] = true;
+        ld["icon"] = "mdi:led-on";
+        ld["availability_topic"] = s_lwtTopic;
+        addDevice(ld["device"].to<JsonObject>());
+        String lp;
+        serializeJson(ld, lp);
+        publish(ltopic, lp.c_str(), 1, true);
+    }
+
     // Alarmi: binary_sensor "problem" po pravilu (specifikacija §11)
     for (size_t i = 0; i < alarm_manager::ruleCount(); i++) {
         const alarm_manager::RuleInfo &ai = alarm_manager::info(i);
@@ -208,7 +238,7 @@ static void publishDiscovery() {
 static const char *const EXTRA_ENTITIES[][2] = {
     {"sensor", "wifi_rssi"},      {"sensor", "uptime"},           {"sensor", "sensors_ok"},
     {"sensor", "time_last_sync"}, {"sensor", "time_status"},      {"binary_sensor", "mqtt_connected"},
-    {"button", "restart"},
+    {"button", "restart"},          {"light", "led"},
 };
 
 // Prazna retained poruka na Discovery topic uklanja entitet iz Home Assistant-a (specifikacija §4A.5)
@@ -395,6 +425,15 @@ static void onMqttEvent(void *, esp_event_base_t, int32_t eventId, void *eventDa
                 ev->data_len == 6 && strncmp(ev->data, "online", 6) == 0) {
                 s_haOnlineEvent = true;
             }
+            // LED indikator iz Home Assistant-a: {"state":"ON","brightness":128}
+            if (ev->topic_len == (int)strlen(s_ledSetTopic) && strncmp(ev->topic, s_ledSetTopic, ev->topic_len) == 0) {
+                JsonDocument cmd;
+                if (!deserializeJson(cmd, ev->data, ev->data_len)) {
+                    s_ledCmdOn = strcmp(cmd["state"] | "ON", "OFF") != 0;
+                    s_ledCmdBrightness = cmd["brightness"].is<int>() ? (int)cmd["brightness"] : -1;
+                    s_ledCommand = true;
+                }
+            }
             // Komanda za restart (dugme u Home Assistant-u)
             if (ev->topic_len == (int)strlen(s_restartTopic) && strncmp(ev->topic, s_restartTopic, ev->topic_len) == 0 &&
                 ev->data_len == 7 && strncmp(ev->data, "restart", 7) == 0) {
@@ -429,6 +468,7 @@ static void startClient() {
     snprintf(s_lwtTopic, sizeof(s_lwtTopic), "%s/availability", cfg.mqttBaseTopic);
     snprintf(s_haStatusTopic, sizeof(s_haStatusTopic), "%s/status", cfg.mqttDiscoveryPrefix);
     snprintf(s_restartTopic, sizeof(s_restartTopic), "%s/cmd/restart", cfg.mqttBaseTopic);
+    snprintf(s_ledSetTopic, sizeof(s_ledSetTopic), "%s/led/set", cfg.mqttBaseTopic);
 
     esp_mqtt_client_config_t mc = {};
     mc.broker.address.uri = s_uri;
@@ -553,6 +593,8 @@ void update(uint32_t now, bool networkUp) {
         LOG_I(TAG, "Povezan na broker %s", s_uri);
         publish(s_lwtTopic, "online", 1, true);
         esp_mqtt_client_subscribe(s_client, s_restartTopic, 1);
+        esp_mqtt_client_subscribe(s_client, s_ledSetTopic, 1);
+        s_ledStateKnown = false;  // stanje LED-a se ponovo objavljuje
         if (cfg.mqttDiscovery) {
             esp_mqtt_client_subscribe(s_client, s_haStatusTopic, 0);
             publishDiscovery();
@@ -579,6 +621,26 @@ void update(uint32_t now, bool networkUp) {
     else snprintf(s_errorText, sizeof(s_errorText), "broker odbija vezu (kod %d)", err - 100);
 
     if (s_connected) publishAlarms(false);
+
+    // LED: komanda iz HA se primenjuje u glavnoj petlji, stanje se objavljuje kada se promeni
+    if (s_ledCommand) {
+        s_ledCommand = false;
+        led_manager::setFromHomeAssistant(s_ledCmdOn, s_ledCmdBrightness);
+    }
+    if (s_connected) {
+        bool on = config_manager::get().ledEnabled;
+        uint8_t br = config_manager::get().ledBrightness;
+        if (!s_ledStateKnown || on != s_ledLastOn || br != s_ledLastBrightness) {
+            s_ledStateKnown = true;
+            s_ledLastOn = on;
+            s_ledLastBrightness = br;
+            char topic[128], payload[64];
+            snprintf(topic, sizeof(topic), "%s/led/state", cfg.mqttBaseTopic);
+            snprintf(payload, sizeof(payload), "{\"state\":\"%s\",\"brightness\":%u}", on ? "ON" : "OFF",
+                     (unsigned)((br * 255 + 50) / 100));
+            publish(topic, payload, 1, true);
+        }
+    }
     if (s_connected && (s_lastPublishMs == 0 || now - s_lastPublishMs >= (uint32_t)cfg.mqttIntervalS * 1000)) {
         publishReadings(now);
     }
