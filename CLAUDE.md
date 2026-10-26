@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The project uses **PlatformIO with the Arduino framework** (pioarduino platform 53.03.13 = Arduino-ESP32 3.1.3 on ESP-IDF 5.3). The user confirmed this choice. Arduino core 3.x APIs differ from 2.x (e.g. `esp_task_wdt_config_t`, the RMT/LEDC APIs), so check that any library you add supports core 3.x.
 
-Development follows the staged plan in spec §19–20. Phases 1–7, OTA and most of Phase 8 (alarms, logs) are done (firmware v0.7.0). The current status table is in spec §19A. **Next: Phase 8, alarms and diagnostics** (thresholds with hysteresis, active/past alarms, MQTT alarm topics, log view in the UI).
+Development follows the staged plan in spec §19–20. Phases 1–7, OTA and most of Phase 8 (alarms, logs) are done (firmware v0.7.0). The current status table is in spec §19A. **Remaining:** the WS2812B `led_manager` (when the LED is wired), optional sensors (§4A), the rest of security (§14) and the 24–72 h soak test.
 
 - `docs/ESP32_R201_Meteo_Stanica_Specifikacija.md`: the full functional and technical spec (in Serbian). It is the source of truth for requirements. Read the relevant section before you implement any module.
 - `docs/Front.jpg` / `docs/Back.jpg`: photos of the actual dev board.
