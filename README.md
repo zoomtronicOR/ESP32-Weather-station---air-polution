@@ -25,6 +25,16 @@ Home Assistant preko MQTT-a i ažurira se preko Wi-Fi-ja (OTA). Radi i bez inter
   ako novi firmware ne radi stabilno.
 - **Statusna LED na ploči:** kod treptanja (1 bljesak / 2 s = sve ispravno).
 
+## Izgled web interfejsa
+
+| Kontrolna tabla (kartice) | Kontrolna tabla (instrumenti) |
+|---|---|
+| ![Kontrolna tabla](docs/screenshots/dashboard.png) | ![Instrumenti](docs/screenshots/instrumenti.png) |
+| **Istorija** | **Senzori i povezivanje** |
+| ![Istorija](docs/screenshots/istorija.png) | ![Senzori](docs/screenshots/senzori.png) |
+| **Alarmiranje** | **Sistem** |
+| ![Alarmiranje](docs/screenshots/alarmi.png) | ![Sistem](docs/screenshots/sistem.png) |
+
 ## Hardver
 
 Ploča: NodeMCU ESP-32S V1.1 (ESP32-D0WD-V3, 4 MB flash, bez PSRAM-a).
@@ -85,9 +95,13 @@ include/       config.h (konstante), pins.h (raspored pinova), log.h
 data/          web interfejs (HTML/CSS/JS, bez spoljnih biblioteka)
 test/          testovi pojedinačnih senzora na samoj ploči (pio test -f test_<senzor>)
 tools/         OTA upload i alat za dugotrajni test
-docs/          fotografije ploče
+docs/          fotografije ploče i snimci ekrana
 partitions.csv tabela particija (2 × OTA, LittleFS web, LittleFS istorija)
 ```
 
 Vrednosti i statistika su lokalno izmerene i izračunate; nivo kvaliteta vazduha je lokalna procena,
 a ne zvanični indeks ili meteorološka prognoza.
+
+## Licenca
+
+MIT, videti [LICENSE](LICENSE).
