@@ -38,8 +38,7 @@ Ploča: NodeMCU ESP-32S V1.1 (ESP32-D0WD-V3, 4 MB flash, bez PSRAM-a).
 | SPS30 | I2C1 (0x69) | SDA P16, SCL P17, SEL → GND, pull-up 4,7-10 kΩ na 3,3 V | 5 V |
 | WS2812B (opciono) | RMT | DIN P27 preko 330-470 Ω | 5 V |
 
-Svi pinovi su u [`include/pins.h`](include/pins.h). Detaljna specifikacija:
-[`docs/ESP32_R201_Meteo_Stanica_Specifikacija.md`](docs/ESP32_R201_Meteo_Stanica_Specifikacija.md).
+Svi pinovi su u [`include/pins.h`](include/pins.h). Fotografije ploče su u folderu [`docs/`](docs/).
 
 ## Izgradnja i prvo pokretanje
 
@@ -86,7 +85,7 @@ include/       config.h (konstante), pins.h (raspored pinova), log.h
 data/          web interfejs (HTML/CSS/JS, bez spoljnih biblioteka)
 test/          testovi pojedinačnih senzora na samoj ploči (pio test -f test_<senzor>)
 tools/         OTA upload i alat za dugotrajni test
-docs/          specifikacija i fotografije ploče
+docs/          fotografije ploče
 partitions.csv tabela particija (2 × OTA, LittleFS web, LittleFS istorija)
 ```
 

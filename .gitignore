@@ -29,3 +29,6 @@ soak/
 
 # Lokalna uputstva za razvoj (ne objavljuju se)
 CLAUDE.md
+
+# Specifikacija projekta (ostaje lokalno, ne objavljuje se)
+docs/ESP32_R201_Meteo_Stanica_Specifikacija.md
