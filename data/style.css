@@ -182,6 +182,13 @@ label.check { display: flex; align-items: center; gap: 8px; color: var(--text); 
 .bar.warn > span { background: var(--warn); }
 .bar.crit > span { background: var(--crit); }
 
+.alarm-banner { display: block; text-decoration: none; color: var(--text); }
+.alarm-item { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); }
+.alarm-item:last-child { border-bottom: 0; }
+input.num { width: 90px; padding: 4px 6px; }
+.nowrap { white-space: nowrap; }
+.log-wrap { max-height: 420px; overflow-y: auto; }
+
 .muted { color: var(--muted); }
 .small { font-size: 13px; }
 .error { color: var(--crit); }

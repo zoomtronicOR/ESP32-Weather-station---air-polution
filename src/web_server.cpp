@@ -8,6 +8,8 @@
 #include <sys/time.h>
 
 #include "air_quality.h"
+#include "alarm_manager.h"
+#include "logger.h"
 #include "config.h"
 #include "config_manager.h"
 #include "diagnostics.h"
@@ -47,6 +49,10 @@ enum Action : uint32_t {
     ACT_FACTORY_RESET = 1 << 8,
     ACT_MQTT_CLEAR = 1 << 9,
     ACT_HISTORY_CLEAR = 1 << 10,
+    ACT_ALARM_CONFIG = 1 << 11,
+    ACT_ALARM_ACK = 1 << 12,
+    ACT_ALARM_CLEAR = 1 << 13,
+    ACT_LOG_LEVEL = 1 << 14,
 };
 
 static SemaphoreHandle_t s_mutex = nullptr;
@@ -54,6 +60,9 @@ static uint32_t s_pending = 0;
 static DeviceConfig s_pendingConfig;
 static time_t s_pendingEpoch = 0;
 static bool s_pendingRemoveFromHa = true;
+static alarm_manager::RuleConfig s_pendingAlarms[16];
+static bool s_pendingAlarmSet[16];
+static int s_pendingAckIdx = -1;
 static uint32_t s_restartAtMs = 0;
 static uint32_t s_factoryResetAtMs = 0;
 static uint32_t s_wifiReconnectAtMs = 0;
@@ -123,6 +132,19 @@ void update(uint32_t now) {
     }
     if (actions & ACT_PORTAL) wifi_manager::startPortal(now);
     if (actions & ACT_HISTORY_CLEAR) storage_manager::clear();
+    if (actions & ACT_ALARM_CONFIG) {
+        if (lock()) {
+            for (size_t i = 0; i < alarm_manager::ruleCount() && i < 16; i++) {
+                if (s_pendingAlarmSet[i]) alarm_manager::setConfig(i, s_pendingAlarms[i]);
+                s_pendingAlarmSet[i] = false;
+            }
+            unlock();
+        }
+        alarm_manager::saveConfig();
+    }
+    if (actions & ACT_ALARM_ACK) alarm_manager::acknowledge(s_pendingAckIdx);
+    if (actions & ACT_ALARM_CLEAR) alarm_manager::clearEvents();
+    if (actions & ACT_LOG_LEVEL) logger::setLevel(config_manager::get().logLevel);
     if (actions & ACT_FACTORY_RESET) {
         LOG_W(TAG, "Vraćanje na fabrička podešavanja na zahtev iz web interfejsa");
         bool sent = removeFromHa && mqtt_manager::removeFromHomeAssistant();
@@ -349,6 +371,7 @@ static void handleStatus(AsyncWebServerRequest *req) {
     JsonObject mq = doc["mqtt"].to<JsonObject>();
     mq["enabled"] = mqtt_manager::enabled();
     mq["connected"] = mqtt_manager::connected();
+    doc["alarms_active"] = alarm_manager::activeCount();
     sendJson(req, doc);
 }
 
@@ -596,6 +619,7 @@ static void handleConfig(AsyncWebServerRequest *req) {
     for (size_t i = 0; i < config_manager::timezoneCount(); i++) tz.add(config_manager::timezoneName(i));
     doc["oled_brightness"] = cfg.oledBrightness;
     doc["status_led_enabled"] = cfg.statusLedEnabled;
+    doc["log_level"] = logger::levelName(cfg.logLevel);
     // Lozinke se nikada ne vraćaju -- samo informacija da li su podešene (specifikacija §13)
     doc["admin_password_set"] = config_manager::adminPasswordSet();
     doc["ap_password_custom"] = cfg.apPass[0] != '\0';
@@ -902,6 +926,150 @@ static void handleMqttPost(AsyncWebServerRequest *req, JsonVariant &json) {
     sendOk(req, cfg.mqttEnabled ? "MQTT podešavanja su sačuvana. Povezivanje na broker..." : "MQTT je isključen.");
 }
 
+// ---------------------------------------------------------------------------
+// Alarmi (specifikacija §11) i logovi (specifikacija §16)
+// ---------------------------------------------------------------------------
+
+static void handleAlarms(AsyncWebServerRequest *req) {
+    JsonDocument doc;
+    uint32_t now = millis();
+    doc["active_count"] = alarm_manager::activeCount();
+    doc["time_valid"] = time_manager::isValid();
+    JsonArray rules = doc["rules"].to<JsonArray>();
+    char buf[24];
+    for (size_t i = 0; i < alarm_manager::ruleCount(); i++) {
+        const auto &in = alarm_manager::info(i);
+        const auto &c = alarm_manager::config(i);
+        const auto &st = alarm_manager::status(i);
+        JsonObject r = rules.add<JsonObject>();
+        r["id"] = in.id;
+        r["name"] = in.name;
+        r["kind"] = alarm_manager::kindKey(in.kind);
+        r["unit"] = in.unit;
+        r["decimals"] = in.decimals;
+        r["reference"] = in.reference;
+        r["enabled"] = c.enabled;
+        r["threshold"] = c.threshold;
+        r["hysteresis"] = c.hysteresis;
+        r["min_duration_s"] = c.minDurationS;
+        r["state"] = alarm_manager::stateKey(st.state);
+        r["acknowledged"] = st.acknowledged;
+        if (st.hasValue) r["value"] = serialized(String(st.value, (unsigned int)in.decimals));
+        if (st.state == alarm_manager::State::Active) {
+            r["peak"] = serialized(String(st.peak, (unsigned int)in.decimals));
+            r["duration_s"] = (now - st.activatedMs) / 1000;
+            if (st.activatedUtc) {
+                time_manager::formatIsoUtc(st.activatedUtc, buf, sizeof(buf));
+                r["activated_utc"] = buf;
+            }
+        } else if (st.state == alarm_manager::State::Pending) {
+            r["pending_s"] = (now - st.sinceMs) / 1000;
+        }
+    }
+    JsonArray events = doc["events"].to<JsonArray>();
+    alarm_manager::forEachEvent(50, [&](const alarm_manager::Event &e) {
+        if (e.rule >= alarm_manager::ruleCount()) return;
+        const auto &in = alarm_manager::info(e.rule);
+        JsonObject o = events.add<JsonObject>();
+        o["rule"] = in.id;
+        o["name"] = in.name;
+        o["event"] = e.type == 1 ? "activated" : (e.type == 2 ? "resolved" : "acknowledged");
+        o["value"] = serialized(String(e.value, (unsigned int)in.decimals));
+        o["unit"] = in.unit;
+        if (e.utc) {
+            time_manager::formatIsoUtc(e.utc, buf, sizeof(buf));
+            o["timestamp"] = buf;
+        } else {
+            o["uptime_s"] = e.uptimeMs / 1000;
+        }
+    });
+    sendJson(req, doc);
+}
+
+static void handleAlarmsPost(AsyncWebServerRequest *req, JsonVariant &json) {
+    if (!requireAuth(req)) return;
+    JsonArray list = json["rules"].as<JsonArray>();
+    if (list.isNull()) return sendError(req, 400, "Nedostaje lista pravila.");
+    alarm_manager::RuleConfig cfgs[16];
+    bool set[16] = {false};
+    for (JsonObject r : list) {
+        int i = alarm_manager::find(r["id"] | "");
+        if (i < 0 || i >= 16) return sendError(req, 400, "Nepoznato pravilo alarma.");
+        alarm_manager::RuleConfig c = alarm_manager::config(i);
+        if (r["enabled"].is<bool>()) c.enabled = r["enabled"];
+        if (r["threshold"].is<float>()) c.threshold = r["threshold"];
+        if (r["hysteresis"].is<float>()) c.hysteresis = r["hysteresis"];
+        if (r["min_duration_s"].is<int>()) {
+            int d = r["min_duration_s"];
+            if (d < 0 || d > 3600) return sendError(req, 400, "Minimalno trajanje mora biti 0-3600 s.");
+            c.minDurationS = d;
+        }
+        if (c.hysteresis < 0 || isnan(c.threshold) || isnan(c.hysteresis)) {
+            return sendError(req, 400, "Neispravan prag ili histereza.");
+        }
+        cfgs[i] = c;
+        set[i] = true;
+    }
+    if (!lock()) return sendError(req, 503, "Uređaj je zauzet, pokušajte ponovo.");
+    for (int i = 0; i < 16; i++) {
+        if (set[i]) {
+            s_pendingAlarms[i] = cfgs[i];
+            s_pendingAlarmSet[i] = true;
+        }
+    }
+    s_pending |= ACT_ALARM_CONFIG;
+    unlock();
+    sendOk(req, "Podešavanja alarma su sačuvana.");
+}
+
+static void handleAlarmsAck(AsyncWebServerRequest *req, JsonVariant &json) {
+    if (!requireAuth(req)) return;
+    const char *id = json["id"] | "";
+    int i = id[0] ? alarm_manager::find(id) : -1;
+    if (id[0] && i < 0) return sendError(req, 400, "Nepoznato pravilo alarma.");
+    if (!lock()) return sendError(req, 503, "Uređaj je zauzet, pokušajte ponovo.");
+    s_pendingAckIdx = i;
+    s_pending |= ACT_ALARM_ACK;
+    unlock();
+    sendOk(req, i < 0 ? "Svi aktivni alarmi su potvrđeni." : "Alarm je potvrđen.");
+}
+
+static void handleLogs(AsyncWebServerRequest *req) {
+    // Logovi se šalju u delovima: do 80 poruka po ~140 znakova
+    AsyncResponseStream *res = req->beginResponseStream("application/json");
+    res->addHeader("Cache-Control", "no-store");
+    res->printf("{\"level\":\"%s\",\"uptime_ms\":%lu,\"dropped\":%lu,\"entries\":[", logger::levelName(logger::level()),
+                (unsigned long)millis(), (unsigned long)logger::droppedCount());
+    bool first = true;
+    logger::forEach([&](const logger::Entry &e) {
+        JsonDocument d;
+        d["ms"] = e.ms;
+        d["level"] = logger::levelName(e.level);
+        d["tag"] = e.tag;
+        d["msg"] = e.msg;
+        if (!first) res->print(',');
+        first = false;
+        serializeJson(d, *res);
+    });
+    res->print("]}");
+    req->send(res);
+}
+
+static void handleLogLevel(AsyncWebServerRequest *req, JsonVariant &json) {
+    if (!requireAuth(req)) return;
+    const char *lvl = json["level"] | "";
+    int level = -1;
+    for (int i = 0; i <= 3; i++) {
+        if (strcasecmp(lvl, logger::levelName(i)) == 0) level = i;
+    }
+    if (level < 0) return sendError(req, 400, "Nivo mora biti ERROR, WARN, INFO ili DEBUG.");
+    if (!lock()) return sendError(req, 503, "Uređaj je zauzet, pokušajte ponovo.");
+    pendingConfig().logLevel = level;
+    s_pending |= ACT_LOG_LEVEL;
+    unlock();
+    sendOk(req, "Nivo logovanja je promenjen.");
+}
+
 static void handleTimePost(AsyncWebServerRequest *req, JsonVariant &json) {
     if (!requireAuth(req)) return;
     if (!json["epoch"].is<int64_t>()) return sendError(req, 400, "Nedostaje vreme (epoch).");
@@ -955,6 +1123,14 @@ void begin() {
         handleAction(req, ACT_PORTAL, "Konfiguracioni portal je pokrenut.");
     });
     s_server.on("/api/v1/mqtt/clear", HTTP_POST, handleMqttClear);
+    s_server.on("/api/v1/alarms/ack", HTTP_POST, handleAlarmsAck);
+    s_server.on("/api/v1/alarms/clear", HTTP_POST, [](AsyncWebServerRequest *req) {
+        handleAction(req, ACT_ALARM_CLEAR, "Istorija alarma je obrisana.");
+    });
+    s_server.on("/api/v1/alarms", HTTP_GET, handleAlarms);
+    s_server.on("/api/v1/alarms", HTTP_POST, handleAlarmsPost);
+    s_server.on("/api/v1/logs/level", HTTP_POST, handleLogLevel);
+    s_server.on("/api/v1/logs", HTTP_GET, handleLogs);
     s_server.on("/api/v1/history/clear", HTTP_POST, [](AsyncWebServerRequest *req) {
         handleAction(req, ACT_HISTORY_CLEAR, "Istorija je obrisana.");
     });

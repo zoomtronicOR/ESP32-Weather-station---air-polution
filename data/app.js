@@ -422,7 +422,7 @@ async function pageDashboard(main) {
     }).join('');
     main.innerHTML = `<div class="page-head"><h2>Kontrolna tabla</h2>
         <div class="actions"><label class="check small"><input type="checkbox" id="needles" ${getNeedles() ? 'checked' : ''}> Kazaljke</label>${toggle}</div></div>
-      ${sections}
+      ${alarmBanner(s)}${sections}
       <p class="muted small">Boje zona: PM2.5, PM10 i nivo kvaliteta vazduha prema EAQI (lokalna procena), UV indeks prema skali WHO;
         Wi-Fi signal prema orijentacionim (korisničkim) granicama. Ostali instrumenti nemaju pragove. Gasni otpor i osvetljenost su na logaritamskoj skali.</p>`;
     bindToggle();
@@ -447,7 +447,7 @@ async function pageDashboard(main) {
   const statusCard = `<div class="card"><div class="head"><span>Status uređaja</span><span class="icon">⚙️</span></div>
       <div class="value" style="font-size:20px">${s.sensors.ok}/${s.sensors.total} <span class="unit">senzora</span></div>
       <div class="foot">${sensorsOk ? 'svi senzori ispravni' : 'proveriti stranicu Senzori'} · Wi-Fi ${s.wifi.connected ? esc(s.wifi.ip) : (s.wifi.portal ? 'portal' : 'nije povezan')}</div></div>`;
-  main.innerHTML = `<div class="page-head"><h2>Kontrolna tabla</h2>${toggle}</div><div class="grid">${aqCard}${cards}${statusCard}</div>
+  main.innerHTML = `<div class="page-head"><h2>Kontrolna tabla</h2>${toggle}</div>${alarmBanner(s)}<div class="grid">${aqCard}${cards}${statusCard}</div>
     <p class="muted small">Vrednosti su lokalno izmerene; nivo kvaliteta vazduha je lokalna procena po skali EAQI, a ne zvanični indeks.</p>`;
   bindToggle();
 }
@@ -737,6 +737,117 @@ async function pageMqtt(main) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Alarmiranje (specifikacija §11)
+// ---------------------------------------------------------------------------
+
+function alarmBanner(s) {
+  if (!s || !s.alarms_active) return '';
+  return `<a class="notice warn alarm-banner" href="#alarmi">⚠️ Aktivnih alarma: <b>${s.alarms_active}</b> - otvori Alarmiranje</a>`;
+}
+
+function fmtEventTime(e) {
+  if (e.timestamp) return fmtFullTime(Date.parse(e.timestamp) / 1000);
+  return `${duration(e.uptime_s)} posle pokretanja (vreme nije bilo sinhronizovano)`;
+}
+
+async function pageAlarms(main) {
+  const a = await api('/alarms');
+  const stateBadge = (r) => {
+    if (!r.enabled) return '<span class="badge">isključen</span>';
+    if (r.state === 'active') return `<span class="badge crit">aktivan</span>${r.acknowledged ? ' <span class="badge">potvrđen</span>' : ''}`;
+    if (r.state === 'pending') return `<span class="badge warn">čeka (${r.pending_s} s)</span>`;
+    return '<span class="badge ok">u redu</span>';
+  };
+  const active = a.rules.filter((r) => r.state === 'active');
+  const activeHtml = active.length ? active.map((r) => `<div class="alarm-item">
+      <div><b>${esc(r.name)}</b> ${r.acknowledged ? '<span class="badge">potvrđen</span>' : ''}<br>
+        <span class="muted small">vrednost ${esc(r.value ?? '-')} ${esc(r.unit)}${r.peak != null ? ` · najgore ${esc(r.peak)} ${esc(r.unit)}` : ''}
+        · traje ${duration(r.duration_s)}${r.activated_utc ? ' · od ' + fmtFullTime(Date.parse(r.activated_utc) / 1000) : ''}</span></div>
+      ${r.acknowledged ? '' : `<button class="btn ghost" data-ack="${r.id}">Potvrdi</button>`}</div>`).join('')
+    : '<p class="muted">Nema aktivnih alarma.</p>';
+
+  const ruleRows = a.rules.map((r) => {
+    const cond = r.kind === 'condition';
+    const thr = cond ? '<span class="muted small">uslov</span>'
+      : `<input type="number" step="any" name="thr_${r.id}" value="${r.threshold}" class="num"> ${esc(r.unit)}`;
+    const hyst = cond ? '<span class="muted small">-</span>'
+      : `<input type="number" step="any" min="0" name="hys_${r.id}" value="${r.hysteresis}" class="num">`;
+    const kindText = { above: 'iznad', below: 'ispod', change3h: 'promena za 3 h ±', condition: '' }[r.kind];
+    return `<tr>
+      <td><label class="check"><input type="checkbox" name="en_${r.id}" ${r.enabled ? 'checked' : ''}> <b>${esc(r.name)}</b></label>
+        <span class="muted small">${esc(r.reference)}</span></td>
+      <td>${stateBadge(r)}${r.value != null && r.state !== 'active' ? `<br><span class="muted small">${esc(r.value)} ${esc(r.unit)}</span>` : ''}</td>
+      <td class="nowrap">${kindText ? `<span class="muted small">${kindText}</span> ` : ''}${thr}</td>
+      <td>${hyst}</td>
+      <td><input type="number" min="0" max="3600" name="dur_${r.id}" value="${r.min_duration_s}" class="num"> s</td></tr>`;
+  }).join('');
+
+  const evName = { activated: 'aktiviran', resolved: 'razrešen', acknowledged: 'potvrđen' };
+  const evCls = { activated: 'crit', resolved: 'ok', acknowledged: '' };
+  const events = a.events.length ? a.events.map((e) => `<tr><td class="small">${esc(fmtEventTime(e))}</td>
+      <td>${esc(e.name)}</td><td><span class="badge ${evCls[e.event]}">${evName[e.event]}</span></td>
+      <td>${esc(e.value)} ${esc(e.unit)}</td></tr>`).join('')
+    : '<tr><td colspan="4" class="muted">Još nema događaja.</td></tr>';
+
+  main.innerHTML = `<div class="page-head"><h2>Alarmiranje</h2>
+      ${active.some((r) => !r.acknowledged) ? '<button class="btn ghost" id="ack-all">Potvrdi sve</button>' : ''}</div>
+    <div class="panel"><h3>Aktivni alarmi (${active.length})</h3>${activeHtml}</div>
+    <div class="panel table-wrap"><h3>Pravila</h3>
+      <p class="muted small">Pragovi su korisnički; gde je podrazumevana vrednost preuzeta iz zvanične skale (EAQI, WHO), to je navedeno.
+        Histereza sprečava treperenje alarma oko praga, a minimalno trajanje zahteva da prekoračenje potraje pre aktiviranja.
+        Obaveštenja se mogu slati iz Home Assistant-a (MQTT binarni senzori "Alarm: ...").</p>
+      <form id="alarm-form"><table>
+        <tr><th>Pravilo</th><th>Stanje</th><th>Prag</th><th>Histereza</th><th>Min. trajanje</th></tr>${ruleRows}</table>
+        <div class="row-end" style="margin-top:12px"><button class="btn" type="submit">Sačuvaj pravila</button></div></form></div>
+    <div class="panel table-wrap"><div class="page-head"><h3>Istorija događaja</h3>
+        <button class="btn ghost" id="alarm-clear">Obriši istoriju alarma</button></div>
+      <table><tr><th>Vreme</th><th>Alarm</th><th>Događaj</th><th>Vrednost</th></tr>${events}</table></div>`;
+
+  main.querySelectorAll('[data-ack]').forEach((b) => {
+    b.onclick = async () => {
+      try { banner((await adminApi('/alarms/ack', { id: b.dataset.ack })).message); setTimeout(() => pageAlarms(main), 1200); }
+      catch (e) { banner(e.message, true); }
+    };
+  });
+  const ackAll = $('#ack-all');
+  if (ackAll) ackAll.onclick = async () => {
+    try { banner((await adminApi('/alarms/ack', {})).message); setTimeout(() => pageAlarms(main), 1200); } catch (e) { banner(e.message, true); }
+  };
+  $('#alarm-clear').onclick = async () => {
+    if (!confirm('Obrisati istoriju alarma?')) return;
+    try { banner((await adminApi('/alarms/clear')).message); setTimeout(() => pageAlarms(main), 1200); } catch (e) { banner(e.message, true); }
+  };
+  $('#alarm-form').onsubmit = async (ev) => {
+    ev.preventDefault();
+    const f = ev.target;
+    const rules = a.rules.map((r) => {
+      const o = { id: r.id, enabled: f[`en_${r.id}`].checked, min_duration_s: Number(f[`dur_${r.id}`].value) };
+      if (r.kind !== 'condition') {
+        o.threshold = Number(f[`thr_${r.id}`].value);
+        o.hysteresis = Number(f[`hys_${r.id}`].value);
+      }
+      return o;
+    });
+    try { banner((await adminApi('/alarms', { rules })).message); setTimeout(() => pageAlarms(main), 1200); } catch (e) { banner(e.message, true); }
+  };
+}
+
+// Logovi na stranici Sistem (specifikacija §16)
+async function renderLogs(box) {
+  const d = await api('/logs');
+  const filter = box.dataset.filter || 'INFO';
+  const order = ['ERROR', 'WARN', 'INFO', 'DEBUG'];
+  const maxIdx = order.indexOf(filter);
+  const rows = d.entries.filter((e) => order.indexOf(e.level) <= maxIdx).reverse().map((e) => {
+    const cls = { ERROR: 'crit', WARN: 'warn' }[e.level] || '';
+    return `<tr><td class="small nowrap">${duration(Math.floor(e.ms / 1000))}</td><td><span class="badge ${cls}">${e.level}</span></td>
+      <td class="small">${esc(e.tag)}</td><td class="small">${esc(e.msg)}</td></tr>`;
+  }).join('');
+  box.querySelector('tbody').innerHTML = rows || '<tr><td colspan="4" class="muted">Nema poruka.</td></tr>';
+  box.querySelector('#log-current').textContent = d.level;
+}
+
 async function pageSystem(main) {
   const s = await api('/system');
   const heapUsed = s.heap_total - s.heap_free;
@@ -776,6 +887,15 @@ async function pageSystem(main) {
       <tr><td class="k">MAC adresa</td><td>${esc(s.mac)}</td></tr>
       <tr><td class="k">ESP-IDF / Arduino</td><td>${esc(s.sdk)} / ${esc(s.arduino)}</td></tr>
     </table></div>
+    <div class="panel" id="logs-box" data-filter="INFO"><div class="page-head"><h3>Logovi</h3>
+        <div class="actions">
+          <label class="small">Prikaz <select id="log-filter">${['ERROR', 'WARN', 'INFO', 'DEBUG'].map((l) => `<option ${l === 'INFO' ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          <label class="small">Nivo uređaja (<span id="log-current"></span>) <select id="log-level">
+            <option value="">promeni...</option>${['ERROR', 'WARN', 'INFO', 'DEBUG'].map((l) => `<option>${l}</option>`).join('')}</select></label>
+          <button class="btn ghost" id="log-refresh">Osveži</button></div></div>
+      <p class="muted small">Poslednjih 80 poruka iz RAM-a (brišu se pri restartu). DEBUG nivo koristiti samo za otklanjanje grešaka.</p>
+      <div class="table-wrap log-wrap"><table><thead><tr><th>Vreme rada</th><th>Nivo</th><th>Modul</th><th>Poruka</th></tr></thead><tbody></tbody></table></div>
+    </div>
     <div class="panel"><h3>Akcije</h3><div class="actions">
       <button class="btn ghost" id="portal-btn">Pokreni konfiguracioni portal</button>
       <button class="btn danger" id="restart-btn">Restartuj uređaj</button>
@@ -798,6 +918,16 @@ async function pageSystem(main) {
       <label class="check"><input type="checkbox" id="factory-remove-ha" checked> Ukloni uređaj iz trenutnog Home Assistant-a (ako je MQTT povezan)</label>
       <div class="actions"><button class="btn danger" id="factory-btn">Vrati fabrička podešavanja</button></div>
     </div>`;
+  const logsBox = $('#logs-box');
+  renderLogs(logsBox).catch(() => {});
+  $('#log-filter').onchange = (ev) => { logsBox.dataset.filter = ev.target.value; renderLogs(logsBox); };
+  $('#log-refresh').onclick = () => renderLogs(logsBox);
+  $('#log-level').onchange = async (ev) => {
+    if (!ev.target.value) return;
+    try { banner((await adminApi('/logs/level', { level: ev.target.value })).message); setTimeout(() => renderLogs(logsBox), 800); }
+    catch (e) { banner(e.message, true); }
+    ev.target.value = '';
+  };
   $('#ota-form').onsubmit = async (ev) => {
     ev.preventDefault();
     const f = ev.target;
@@ -1257,8 +1387,8 @@ const PAGES = {
   mqtt: { render: pageMqtt },
   wifi: { render: pageWifi },
   podesavanja: { render: pageSettings },
-  alarmi: { render: pageLater('Alarmiranje') },
-  sistem: { render: pageSystem, refreshMs: 5000 },
+  alarmi: { render: pageAlarms, refreshMs: 10000 },
+  sistem: { render: pageSystem },
   'o-uredjaju': { render: pageAbout },
 };
 

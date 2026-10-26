@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <FS.h>
 #include <functional>
 
 #include "metrics.h"
@@ -39,6 +40,9 @@ uint32_t intervalSeconds(Resolution r);
 size_t pendingCount();  // intervali koji čekaju pouzdano vreme
 size_t fsTotalBytes();  // particija "history"
 size_t fsUsedBytes();
+// Fajl sistem particije "history" (koristi ga i alarm_manager za događaje); false ako nije montiran
+bool fsReady();
+fs::FS &fs();
 
 // Prolaz kroz zapise od najstarijeg ka najnovijem, sa ts >= from.
 // Bezbedno za poziv iz web zadatka (zaključava pristup fajlu).

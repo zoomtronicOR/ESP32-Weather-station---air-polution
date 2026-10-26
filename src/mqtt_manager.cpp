@@ -5,6 +5,7 @@
 #include <mqtt_client.h>
 
 #include "air_quality.h"
+#include "alarm_manager.h"
 #include "config.h"
 #include "config_manager.h"
 #include "log.h"
@@ -188,6 +189,17 @@ static void publishDiscovery() {
     serializeJson(btn, payload);
     publish(topic, payload.c_str(), 1, true);
 
+    // Alarmi: binary_sensor "problem" po pravilu (specifikacija §11)
+    for (size_t i = 0; i < alarm_manager::ruleCount(); i++) {
+        const alarm_manager::RuleInfo &ai = alarm_manager::info(i);
+        char objectId[40], name[64];
+        snprintf(objectId, sizeof(objectId), "alarm_%s", ai.id);
+        snprintf(name, sizeof(name), "Alarm: %s", ai.name);
+        snprintf(stateTopic, sizeof(stateTopic), "%s/alarm/%s", cfg.mqttBaseTopic, ai.id);
+        publishDiscoveryEntity("binary_sensor", objectId, name, stateTopic, "problem", nullptr, nullptr, nullptr, false,
+                               -1, 0, "ON", "OFF");
+    }
+
     LOG_I(TAG, "Home Assistant Discovery objavljen (prefiks \"%s\")", cfg.mqttDiscoveryPrefix);
 }
 
@@ -213,7 +225,14 @@ static void unpublishDiscovery() {
         publish(topic, "", 1, true);
     }
     // Brišu se i retained poruke stanja na brokeru
-    const char *retainedTopics[] = {"availability", "status", "time_status", "time_last_sync"};
+    for (size_t i = 0; i < alarm_manager::ruleCount(); i++) {
+        snprintf(topic, sizeof(topic), "%s/binary_sensor/%s/alarm_%s/config", cfg.mqttDiscoveryPrefix, id,
+                 alarm_manager::info(i).id);
+        publish(topic, "", 1, true);
+        snprintf(topic, sizeof(topic), "%s/alarm/%s", cfg.mqttBaseTopic, alarm_manager::info(i).id);
+        publish(topic, "", 1, true);
+    }
+    const char *retainedTopics[] = {"availability", "status", "time_status", "time_last_sync", "alarms"};
     for (const char *t : retainedTopics) {
         snprintf(topic, sizeof(topic), "%s/%s", cfg.mqttBaseTopic, t);
         publish(topic, "", 1, true);
@@ -224,6 +243,50 @@ static void unpublishDiscovery() {
 // ---------------------------------------------------------------------------
 // Objavljivanje merenja
 // ---------------------------------------------------------------------------
+
+static uint32_t s_alarmCounter = 0xFFFFFFFF;
+
+static void publishAlarms(bool force) {
+    const DeviceConfig &cfg = config_manager::get();
+    char topic[128];
+    uint32_t counter = alarm_manager::changeCounter();
+    if (force || counter != s_alarmCounter) {
+        s_alarmCounter = counter;
+        JsonDocument sum;
+        JsonArray active = sum["active"].to<JsonArray>();
+        for (size_t i = 0; i < alarm_manager::ruleCount(); i++) {
+            bool on = alarm_manager::status(i).state == alarm_manager::State::Active;
+            if (on) active.add(alarm_manager::info(i).id);
+            snprintf(topic, sizeof(topic), "%s/alarm/%s", cfg.mqttBaseTopic, alarm_manager::info(i).id);
+            publish(topic, on ? "ON" : "OFF", 1, true);
+        }
+        sum["active_count"] = active.size();
+        String json;
+        serializeJson(sum, json);
+        snprintf(topic, sizeof(topic), "%s/alarms", cfg.mqttBaseTopic);
+        publish(topic, json.c_str(), 1, true);
+    }
+    // Događaji (aktiviran / razrešen / potvrđen) -- HA ih može koristiti za obaveštenja
+    alarm_manager::Event e;
+    while (alarm_manager::popEvent(e)) {
+        const alarm_manager::RuleInfo &ai = alarm_manager::info(e.rule);
+        JsonDocument ev;
+        ev["rule"] = ai.id;
+        ev["name"] = ai.name;
+        ev["event"] = e.type == 1 ? "activated" : (e.type == 2 ? "resolved" : "acknowledged");
+        ev["value"] = serialized(String(e.value, (unsigned int)ai.decimals));
+        ev["unit"] = ai.unit;
+        if (e.utc) {
+            char ts[24];
+            time_manager::formatIsoUtc(e.utc, ts, sizeof(ts));
+            ev["timestamp"] = ts;
+        }
+        String json;
+        serializeJson(ev, json);
+        snprintf(topic, sizeof(topic), "%s/alarm_event", cfg.mqttBaseTopic);
+        publish(topic, json.c_str(), 1, false);
+    }
+}
 
 static void publishReadings(uint32_t now) {
     const DeviceConfig &cfg = config_manager::get();
@@ -495,6 +558,7 @@ void update(uint32_t now, bool networkUp) {
         }
         for (size_t i = 0; i < (size_t)MetricId::Count; i++) s_sentValid[i] = false;
         s_lastPublishMs = 0;  // odmah objaviti merenja
+        publishAlarms(true);
     }
     if (s_haOnlineEvent) {
         s_haOnlineEvent = false;
@@ -513,6 +577,7 @@ void update(uint32_t now, bool networkUp) {
         strlcpy(s_errorText, "broker odbija Client ID", sizeof(s_errorText));
     else snprintf(s_errorText, sizeof(s_errorText), "broker odbija vezu (kod %d)", err - 100);
 
+    if (s_connected) publishAlarms(false);
     if (s_connected && (s_lastPublishMs == 0 || now - s_lastPublishMs >= (uint32_t)cfg.mqttIntervalS * 1000)) {
         publishReadings(now);
     }

@@ -329,6 +329,10 @@ size_t fsTotalBytes() { return s_fs.totalBytes(); }
 
 size_t fsUsedBytes() { return s_fs.usedBytes(); }
 
+bool fsReady() { return s_rings[0].ok; }
+
+fs::FS &fs() { return s_fs; }
+
 void forEach(Resolution r, uint32_t from, const std::function<void(const HistRecord &)> &fn) {
     Ring &rg = ring(r);
     if (!rg.ok) return;

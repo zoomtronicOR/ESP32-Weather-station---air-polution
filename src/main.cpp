@@ -5,6 +5,8 @@
 #include <esp_task_wdt.h>
 
 #include "air_quality.h"
+#include "alarm_manager.h"
+#include "logger.h"
 #include "config.h"
 #include "config_manager.h"
 #include "diagnostics.h"
@@ -112,6 +114,7 @@ static void printHelp() {
     Serial.println("  c -- I2C skeniranje (obe magistrale)");
     Serial.println("  t -- test pouzdanosti I2C magistrale (100 i 400 kHz)");
     Serial.println("  p -- pokretanje konfiguracionog portala");
+    Serial.println("  a -- brisanje administratorske lozinke (ponovo važi lozinka pristupne tačke)");
     Serial.println("  r -- softverski restart");
     Serial.println("  w -- test watchdog-a (glavna petlja se namerno blokira)");
     Serial.println("  h -- pomoć");
@@ -129,6 +132,13 @@ static void handleSerial() {
             case 'c': i2c_bus::printScan(); break;
             case 't': i2c_bus::stressTest(2000); break;
             case 'p': wifi_manager::startPortal(millis()); break;
+            case 'a':
+                // Oporavak zaboravljene lozinke -- moguć samo uz fizički pristup (USB)
+                config_manager::edit().adminPass[0] = '\0';
+                config_manager::save();
+                ota_manager::applyConfig();
+                LOG_W(TAG, "Administratorska lozinka je obrisana; važi lozinka pristupne tačke");
+                break;
             case 'h': printHelp(); break;
             case 'r':
                 LOG_W(TAG, "Softverski restart na zahtev korisnika");
@@ -158,6 +168,7 @@ void setup() {
     setupWatchdog();
     config_manager::begin();
     status_led::setEnabled(config_manager::get().statusLedEnabled);
+    logger::setLevel(config_manager::get().logLevel);
     time_manager::begin();
     i2c_bus::begin();
     i2c_bus::printScan();
@@ -165,6 +176,7 @@ void setup() {
     sensor_manager::begin();
     pinMode(PIN_BOOT_BUTTON, INPUT_PULLUP);
     storage_manager::begin();  // LittleFS i fajlovi istorije
+    alarm_manager::begin();
     wifi_manager::begin(millis());
     web_server::begin();  // posle Wi-Fi-ja, jer mrežni sloj mora biti pokrenut
     ota_manager::begin();
@@ -179,6 +191,7 @@ void loop() {
     sensor_manager::poll(now);
     air_quality::update(now);
     storage_manager::update(now);
+    alarm_manager::update(now);
 
     wifi_manager::update(now);
     time_manager::update(now, wifi_manager::connected());

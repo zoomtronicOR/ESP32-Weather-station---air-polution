@@ -41,6 +41,9 @@ struct DeviceConfig {
     // Prikaz
     uint8_t oledBrightness = 80;  // 0–100 %; 0 = ekran isključen
     bool statusLedEnabled = true; // plava LED na ploči (kod treptanja, specifikacija §16.1)
+
+    // Dijagnostika
+    uint8_t logLevel = 2;         // 0 = ERROR ... 3 = DEBUG (specifikacija §16)
 };
 
 namespace config_manager {

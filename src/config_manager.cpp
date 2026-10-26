@@ -66,6 +66,7 @@ void begin() {
     loadString(p, "tz", s_config.timezone, sizeof(s_config.timezone));
     s_config.oledBrightness = p.getUChar("oledbr", 80);
     s_config.statusLedEnabled = p.getBool("sled", true);
+    s_config.logLevel = min<uint8_t>(3, p.getUChar("loglvl", 2));
     s_config.mqttEnabled = p.getBool("mqtt", false);
     loadString(p, "mhost", s_config.mqttHost, sizeof(s_config.mqttHost));
     s_config.mqttPort = p.getUShort("mport", 1883);
@@ -127,6 +128,7 @@ bool save() {
     p.putString("tz", s_config.timezone);
     p.putUChar("oledbr", s_config.oledBrightness);
     p.putBool("sled", s_config.statusLedEnabled);
+    p.putUChar("loglvl", s_config.logLevel);
     p.putBool("mqtt", s_config.mqttEnabled);
     p.putString("mhost", s_config.mqttHost);
     p.putUShort("mport", s_config.mqttPort);
