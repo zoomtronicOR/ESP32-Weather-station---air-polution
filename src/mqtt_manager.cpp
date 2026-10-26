@@ -10,6 +10,7 @@
 #include "config_manager.h"
 #include "log.h"
 #include "metrics.h"
+#include "ota_manager.h"
 #include "sensor_manager.h"
 #include "time_manager.h"
 
@@ -543,7 +544,7 @@ void update(uint32_t now, bool networkUp) {
     }
     if (s_restartAtMs != 0 && (int32_t)(now - s_restartAtMs) >= 0) {
         delay(100);
-        ESP.restart();
+        ota_manager::restartNow();
     }
 
     if (s_connectedEvent) {

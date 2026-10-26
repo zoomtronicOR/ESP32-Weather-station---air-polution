@@ -25,6 +25,11 @@ bool webWrite(uint8_t *data, size_t len, size_t total);
 bool webEnd(String &error);
 void webAbort();
 
+// Namerni restart (web, Home Assistant, serijska komanda, posle ažuriranja web fajlova).
+// Nepotvrđeni novi firmware se prvo potvrđuje: namerni restart nije pad, pa ne sme da izazove
+// vraćanje na prethodnu verziju.
+void restartNow();
+
 const char *runningPartition();
 bool pendingVerify();     // novi firmware još nije potvrđen
 

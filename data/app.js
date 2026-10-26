@@ -571,7 +571,7 @@ async function pageSettings(main) {
   main.innerHTML = `<h2>Podešavanja</h2>
     <div class="panel"><h3>Prikaz</h3>
       <form class="settings" id="display-form">
-        <label>Osvetljenje OLED ekrana: <b id="oled-val">${c.oled_brightness} %</b>
+        <label><span>Osvetljenje OLED ekrana: <b id="oled-val">${c.oled_brightness} %</b></span>
           <input type="range" name="oled_brightness" min="0" max="100" step="5" value="${c.oled_brightness}"></label>
         <p class="muted small">0 % isključuje ekran. Promena se primenjuje odmah.</p>
         <label class="check"><input type="checkbox" name="status_led_enabled" ${c.status_led_enabled ? 'checked' : ''}>
@@ -841,11 +841,19 @@ async function renderLogs(box) {
   const maxIdx = order.indexOf(filter);
   const rows = d.entries.filter((e) => order.indexOf(e.level) <= maxIdx).reverse().map((e) => {
     const cls = { ERROR: 'crit', WARN: 'warn' }[e.level] || '';
-    return `<tr><td class="small nowrap">${duration(Math.floor(e.ms / 1000))}</td><td><span class="badge ${cls}">${e.level}</span></td>
+    return `<tr><td class="small nowrap">${fmtUptimeMs(e.ms)}</td><td><span class="badge ${cls}">${e.level}</span></td>
       <td class="small">${esc(e.tag)}</td><td class="small">${esc(e.msg)}</td></tr>`;
   }).join('');
   box.querySelector('tbody').innerHTML = rows || '<tr><td colspan="4" class="muted">Nema poruka.</td></tr>';
-  box.querySelector('#log-current').textContent = d.level;
+  box.querySelector('#log-level').value = d.level;  // nivo koji je stvarno podešen na uređaju
+}
+
+// Vreme rada iz milisekundi: "2:03:45" ili "1 d 2:03:45"
+function fmtUptimeMs(ms) {
+  const s = Math.floor(ms / 1000);
+  const d = Math.floor(s / 86400), h = Math.floor(s / 3600) % 24;
+  const mm = String(Math.floor(s / 60) % 60).padStart(2, '0'), ss = String(s % 60).padStart(2, '0');
+  return `${d ? d + ' d ' : ''}${h}:${mm}:${ss}`;
 }
 
 async function pageSystem(main) {
@@ -888,11 +896,10 @@ async function pageSystem(main) {
       <tr><td class="k">ESP-IDF / Arduino</td><td>${esc(s.sdk)} / ${esc(s.arduino)}</td></tr>
     </table></div>
     <div class="panel" id="logs-box" data-filter="INFO"><div class="page-head"><h3>Logovi</h3>
-        <div class="actions">
-          <label class="small">Prikaz <select id="log-filter">${['ERROR', 'WARN', 'INFO', 'DEBUG'].map((l) => `<option ${l === 'INFO' ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
-          <label class="small">Nivo uređaja (<span id="log-current"></span>) <select id="log-level">
-            <option value="">promeni...</option>${['ERROR', 'WARN', 'INFO', 'DEBUG'].map((l) => `<option>${l}</option>`).join('')}</select></label>
-          <button class="btn ghost" id="log-refresh">Osveži</button></div></div>
+        <div class="toolbar">
+          <label class="inline">Prikaz <select id="log-filter">${['ERROR', 'WARN', 'INFO', 'DEBUG'].map((l) => `<option ${l === 'INFO' ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+          <label class="inline">Nivo uređaja <select id="log-level">${['ERROR', 'WARN', 'INFO', 'DEBUG'].map((l) => `<option>${l}</option>`).join('')}</select></label>
+          <button class="btn ghost btn-sm" id="log-refresh">Osveži</button></div></div>
       <p class="muted small">Poslednjih 80 poruka iz RAM-a (brišu se pri restartu). DEBUG nivo koristiti samo za otklanjanje grešaka.</p>
       <div class="table-wrap log-wrap"><table><thead><tr><th>Vreme rada</th><th>Nivo</th><th>Modul</th><th>Poruka</th></tr></thead><tbody></tbody></table></div>
     </div>
@@ -903,8 +910,8 @@ async function pageSystem(main) {
     <div class="panel"><h3>Ažuriranje firmware-a (OTA)</h3>
       <p class="small">Trenutna verzija: <b>${esc(s.firmware)}</b> · aktivna particija ${esc(s.ota_partition)}${s.ota_pending_verify ? ' · <b>novi firmware čeka potvrdu</b> (potvrđuje se posle 60 s stabilnog rada)' : ''}</p>
       <form class="settings" id="ota-form">
-        <label>Firmware (<code>firmware.bin</code>)<input type="file" name="fw" accept=".bin"></label>
-        <label>Web interfejs (<code>littlefs.bin</code>, istorija merenja ostaje)<input type="file" name="fs" accept=".bin"></label>
+        <label><span>Firmware (<code>firmware.bin</code>)</span><input type="file" name="fw" accept=".bin"></label>
+        <label><span>Web interfejs (<code>littlefs.bin</code>, istorija merenja ostaje)</span><input type="file" name="fs" accept=".bin"></label>
         <div class="bar" id="ota-bar" hidden><span style="width:0%"></span></div>
         <p class="muted small" id="ota-status">Slika se proverava pre upisa (zaglavlje, čip, kontrolni zbir). Ako novi firmware ne radi stabilno,
           uređaj se sam vraća na prethodnu verziju.</p>
@@ -923,10 +930,9 @@ async function pageSystem(main) {
   $('#log-filter').onchange = (ev) => { logsBox.dataset.filter = ev.target.value; renderLogs(logsBox); };
   $('#log-refresh').onclick = () => renderLogs(logsBox);
   $('#log-level').onchange = async (ev) => {
-    if (!ev.target.value) return;
-    try { banner((await adminApi('/logs/level', { level: ev.target.value })).message); setTimeout(() => renderLogs(logsBox), 800); }
+    try { banner((await adminApi('/logs/level', { level: ev.target.value })).message); }
     catch (e) { banner(e.message, true); }
-    ev.target.value = '';
+    setTimeout(() => renderLogs(logsBox), 800);  // vraća stvarni nivo ako promena nije uspela
   };
   $('#ota-form').onsubmit = async (ev) => {
     ev.preventDefault();

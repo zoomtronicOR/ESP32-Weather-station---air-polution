@@ -143,7 +143,7 @@ static void handleSerial() {
             case 'r':
                 LOG_W(TAG, "Softverski restart na zahtev korisnika");
                 Serial.flush();
-                ESP.restart();
+                ota_manager::restartNow();
                 break;
             case 'w':
                 LOG_W(TAG, "Test watchdog-a: petlja se blokira, restart za oko %u s", WDT_TIMEOUT_MS / 1000);
@@ -212,7 +212,7 @@ void loop() {
 
     if (now - s_lastStatusMs >= STATUS_INTERVAL_MS) {
         s_lastStatusMs = now;
-        diagnostics::printStatus();
+        diagnostics::logStatus();
     }
 
     if (now - s_lastMetricsPrintMs >= METRICS_PRINT_MS) {

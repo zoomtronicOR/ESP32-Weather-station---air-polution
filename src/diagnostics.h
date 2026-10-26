@@ -11,6 +11,7 @@ void begin();
 
 void printChipInfo();
 void printStatus();
+void logStatus();  // periodično, nivo DEBUG
 
 uint32_t bootCount();
 esp_reset_reason_t resetReason();

@@ -69,12 +69,26 @@ void printChipInfo() {
     Serial.println();
 }
 
-void printStatus() {
+static void formatStatus(char *buf, size_t len) {
     uint32_t sec = millis() / 1000;
-    LOG_I(TAG, "Uptime %luh %02lum %02lus | heap slobodno %lu B, min %lu B, najveći blok %lu B",
-          (unsigned long)(sec / 3600), (unsigned long)((sec / 60) % 60), (unsigned long)(sec % 60),
-          (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getMinFreeHeap(),
-          (unsigned long)ESP.getMaxAllocHeap());
+    snprintf(buf, len, "Uptime %luh %02lum %02lus | heap slobodno %lu B, min %lu B, najveći blok %lu B",
+             (unsigned long)(sec / 3600), (unsigned long)((sec / 60) % 60), (unsigned long)(sec % 60),
+             (unsigned long)ESP.getFreeHeap(), (unsigned long)ESP.getMinFreeHeap(),
+             (unsigned long)ESP.getMaxAllocHeap());
+}
+
+void printStatus() {
+    // Serijska komanda 's': ispis uvek, bez obzira na nivo logovanja
+    char buf[128];
+    formatStatus(buf, sizeof(buf));
+    Serial.println(buf);
+}
+
+void logStatus() {
+    // Periodični zapis je DEBUG, jer bi inače istisnuo važne poruke iz kružnog bafera logova
+    char buf[128];
+    formatStatus(buf, sizeof(buf));
+    LOG_D(TAG, "%s", buf);
 }
 
 uint32_t bootCount() { return s_bootCount; }

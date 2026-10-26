@@ -161,6 +161,16 @@ void webAbort() {
     s_inProgress = false;
 }
 
+void restartNow() {
+    if (s_pendingVerify) {
+        s_pendingVerify = false;
+        esp_ota_mark_app_valid_cancel_rollback();
+        LOG_I(TAG, "Novi firmware je potvrđen pre namernog restarta");
+    }
+    delay(100);
+    ESP.restart();
+}
+
 const char *runningPartition() {
     const esp_partition_t *p = esp_ota_get_running_partition();
     return p ? p->label : "?";

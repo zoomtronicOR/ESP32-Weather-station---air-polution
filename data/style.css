@@ -188,6 +188,10 @@ label.check { display: flex; align-items: center; gap: 8px; color: var(--text); 
 input.num { width: 90px; padding: 4px 6px; }
 .nowrap { white-space: nowrap; }
 .log-wrap { max-height: 420px; overflow-y: auto; }
+.toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+label.inline { display: inline-flex; flex-direction: row; align-items: center; gap: 6px; font-size: 13px; color: var(--muted); white-space: nowrap; }
+label.inline select { padding: 4px 8px; }
+.btn-sm { padding: 5px 12px; font-size: 13px; }
 
 .muted { color: var(--muted); }
 .small { font-size: 13px; }

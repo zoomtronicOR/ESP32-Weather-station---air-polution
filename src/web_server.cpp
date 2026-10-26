@@ -91,7 +91,7 @@ void update(uint32_t now) {
     if (due(s_restartAtMs, now)) {
         LOG_W(TAG, "Restart na zahtev iz web interfejsa");
         delay(100);
-        ESP.restart();
+        ota_manager::restartNow();
     }
     if (due(s_wifiReconnectAtMs, now)) {
         s_wifiReconnectAtMs = 0;
