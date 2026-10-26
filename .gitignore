@@ -26,3 +26,6 @@ secrets/
 
 # Rezultati dugotrajnog testa
 soak/
+
+# Lokalna uputstva za razvoj (ne objavljuju se)
+CLAUDE.md
