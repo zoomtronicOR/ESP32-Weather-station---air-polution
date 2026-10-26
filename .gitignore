@@ -20,3 +20,6 @@ include/secrets.h
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+# Lokalne tajne (OTA lozinka i sl.)
+secrets/

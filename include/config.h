@@ -3,7 +3,7 @@
 // Osnovni parametri firmware-a
 
 #define DEVICE_NAME       "esp32_r201"
-#define FW_VERSION        "0.5.0"
+#define FW_VERSION        "0.6.0"
 
 #define SERIAL_BAUD       115200
 
@@ -68,6 +68,9 @@
 #define MQTT_RECONNECT_MS       10000   // pauza između pokušaja povezivanja na broker
 #define MQTT_RESEND_MS          60000   // nepromenjene vrednosti se ponovo šalju najkasnije na 60 s
                                         // (HA expire_after je bar 3 × ovaj rok)
+
+// OTA (specifikacija §15)
+#define OTA_VERIFY_MS           60000   // novi firmware se potvrđuje posle 60 s stabilnog rada
 
 // Web server i pristup (specifikacija §14)
 #define WEB_ADMIN_USER          "admin"

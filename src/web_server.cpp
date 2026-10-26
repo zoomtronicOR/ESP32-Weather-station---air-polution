@@ -17,6 +17,7 @@
 #include "log.h"
 #include "metrics.h"
 #include "mqtt_manager.h"
+#include "ota_manager.h"
 #include "pins.h"
 #include "sensor_manager.h"
 #include "status_led.h"
@@ -57,6 +58,9 @@ static uint32_t s_restartAtMs = 0;
 static uint32_t s_factoryResetAtMs = 0;
 static uint32_t s_wifiReconnectAtMs = 0;
 
+static bool lock();
+static void unlock();
+
 // Vraća kopiju konfiguracije u koju handler upisuje izmene (poziva se pod mutex-om)
 static DeviceConfig &pendingConfig() {
     if (!(s_pending & ACT_SAVE_CONFIG)) {
@@ -96,7 +100,10 @@ void update(uint32_t now) {
     bool removeFromHa = s_pendingRemoveFromHa;
     xSemaphoreGive(s_mutex);
 
-    if (actions & ACT_SAVE_CONFIG) config_manager::save();
+    if (actions & ACT_SAVE_CONFIG) {
+        config_manager::save();
+        ota_manager::applyConfig();  // nova administratorska lozinka važi i za OTA
+    }
     if (actions & ACT_TIME_CONFIG) time_manager::applyConfig();
     if (actions & ACT_DISPLAY) {
         display_manager::applyBrightness();
@@ -209,18 +216,18 @@ static bool isPortalClient(AsyncWebServerRequest *req) {
     return wifi_manager::portalActive() && req->client()->localIP() == WiFi.softAPIP();
 }
 
-static bool requireAuth(AsyncWebServerRequest *req) {
+// Provera prijave bez slanja odgovora; vraća 0 (u redu), 401 ili 429
+static int checkAuth(AsyncWebServerRequest *req) {
     uint32_t now = millis();
     AuthSlot &slot = authSlot((uint32_t)req->client()->remoteIP());
     slot.lastSeenMs = now;
     if (slot.lockedUntilMs != 0 && (int32_t)(slot.lockedUntilMs - now) > 0) {
-        sendError(req, 429, "Previše neuspešnih pokušaja prijave. Pokušajte ponovo za nekoliko minuta.");
-        return false;
+        return 429;
     }
     if (req->authenticate(WEB_ADMIN_USER, config_manager::adminPassword())) {
         slot.failures = 0;
         slot.lockedUntilMs = 0;
-        return true;
+        return 0;
     }
     if (++slot.failures >= AUTH_MAX_FAILURES) {
         slot.failures = 0;
@@ -228,9 +235,71 @@ static bool requireAuth(AsyncWebServerRequest *req) {
         LOG_W(TAG, "Prijava zaključana na %lu s za %s", (unsigned long)(AUTH_LOCKOUT_MS / 1000),
               req->client()->remoteIP().toString().c_str());
     }
-    // Bez zaglavlja WWW-Authenticate, da pregledač ne otvara svoj prozor za prijavu
-    sendError(req, 401, "Potrebna je administratorska lozinka.");
-    return false;
+    return 401;
+}
+
+static void sendAuthError(AsyncWebServerRequest *req, int code) {
+    if (code == 429) {
+        sendError(req, 429, "Previše neuspešnih pokušaja prijave. Pokušajte ponovo za nekoliko minuta.");
+    } else {
+        // Bez zaglavlja WWW-Authenticate, da pregledač ne otvara svoj prozor za prijavu
+        sendError(req, 401, "Potrebna je administratorska lozinka.");
+    }
+}
+
+static bool requireAuth(AsyncWebServerRequest *req) {
+    int code = checkAuth(req);
+    if (code != 0) {
+        sendAuthError(req, code);
+        return false;
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// OTA upload iz web interfejsa (specifikacija §15)
+// ---------------------------------------------------------------------------
+
+struct UploadState {
+    int authCode = -1;  // -1 = još nije provereno
+    bool ok = true;
+    String error;
+};
+static UploadState s_upload;
+
+static void handleOtaUpload(AsyncWebServerRequest *req, const String &, size_t index, uint8_t *data, size_t len,
+                            bool final, bool filesystem) {
+    if (index == 0) {
+        s_upload = UploadState();
+        s_upload.authCode = checkAuth(req);
+        if (s_upload.authCode != 0) return;
+        size_t total = req->contentLength();
+        if (!ota_manager::webBegin(filesystem, 0, s_upload.error)) {
+            s_upload.ok = false;
+            return;
+        }
+        LOG_I(TAG, "OTA upload: %lu B", (unsigned long)total);
+    }
+    if (s_upload.authCode != 0 || !s_upload.ok) return;
+    if (len && !ota_manager::webWrite(data, len, req->contentLength())) {
+        s_upload.ok = false;
+        s_upload.error = "Greška pri upisu u flash.";
+        ota_manager::webAbort();
+        return;
+    }
+    if (final && !ota_manager::webEnd(s_upload.error)) {
+        s_upload.ok = false;
+    }
+}
+
+static void handleOtaDone(AsyncWebServerRequest *req) {
+    if (s_upload.authCode == -1) s_upload.authCode = checkAuth(req);  // zahtev bez fajla
+    if (s_upload.authCode != 0) return sendAuthError(req, s_upload.authCode);
+    if (!s_upload.ok) return sendError(req, 400, s_upload.error.length() ? s_upload.error.c_str() : "Ažuriranje nije uspelo.");
+    if (!lock()) return sendError(req, 503, "Uređaj je zauzet.");
+    s_pending |= ACT_RESTART;
+    unlock();
+    sendOk(req, "Ažuriranje je uspešno. Uređaj se restartuje.");
 }
 
 // ---------------------------------------------------------------------------
@@ -595,6 +664,8 @@ static void handleSystem(AsyncWebServerRequest *req) {
     doc["ota_partition_bytes"] = ESP.getFreeSketchSpace();
     doc["fs_total"] = LittleFS.totalBytes();
     doc["fs_used"] = LittleFS.usedBytes();
+    doc["ota_partition"] = ota_manager::runningPartition();
+    doc["ota_pending_verify"] = ota_manager::pendingVerify();
     doc["history_fs_total"] = storage_manager::fsTotalBytes();
     doc["history_fs_used"] = storage_manager::fsUsedBytes();
     doc["history_5min"] = storage_manager::count(storage_manager::Resolution::Min5);
@@ -871,6 +942,14 @@ void begin() {
     }
 
     // VAŽNO: ruta "/x" hvata i "/x/..." (AsyncURIMatcher), pa se podputanje registruju PRE roditeljskih
+    s_server.on("/api/v1/ota/firmware", HTTP_POST, handleOtaDone,
+                [](AsyncWebServerRequest *req, const String &fn, size_t index, uint8_t *data, size_t len, bool final) {
+                    handleOtaUpload(req, fn, index, data, len, final, false);
+                });
+    s_server.on("/api/v1/ota/fs", HTTP_POST, handleOtaDone,
+                [](AsyncWebServerRequest *req, const String &fn, size_t index, uint8_t *data, size_t len, bool final) {
+                    handleOtaUpload(req, fn, index, data, len, final, true);
+                });
     s_server.on("/api/v1/wifi/scan", HTTP_GET, handleWifiScan);
     s_server.on("/api/v1/wifi/portal", HTTP_POST, [](AsyncWebServerRequest *req) {
         handleAction(req, ACT_PORTAL, "Konfiguracioni portal je pokrenut.");

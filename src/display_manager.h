@@ -38,4 +38,7 @@ bool available();
 // Primenjuje osvetljenje iz konfiguracije (0–100 %; 0 = ekran isključen)
 void applyBrightness();
 
+// Ekran napretka OTA ažuriranja; crta se odmah (ArduinoOTA blokira glavnu petlju)
+void showOtaProgress(uint8_t percent, const char *what);
+
 }  // namespace display_manager

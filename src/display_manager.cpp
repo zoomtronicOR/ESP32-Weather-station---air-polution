@@ -9,6 +9,7 @@
 #include "i2c_bus.h"
 #include "log.h"
 #include "metrics.h"
+#include "ota_manager.h"
 #include "sensor_manager.h"
 #include "time_manager.h"
 
@@ -304,6 +305,19 @@ static void buildPage(Content &c, uint8_t page, uint32_t now) {
 // Smena ekrana
 // ---------------------------------------------------------------------------
 
+void showOtaProgress(uint8_t percent, const char *what) {
+    if (!s_available) return;
+    char buf[24];
+    s_oled.clearBuffer();
+    drawLine(HEADER_BASELINE, "", "Ažuriranje");          // žuti pojas
+    drawLine(ROW_BASELINE[0], "", what);
+    snprintf(buf, sizeof(buf), "%u %%", percent);
+    drawLine(ROW_BASELINE[1], "Napredak", buf);
+    s_oled.drawFrame(0, 50, 128, 12);
+    s_oled.drawBox(2, 52, (uint16_t)124 * percent / 100, 8);
+    s_oled.sendBuffer();
+}
+
 void setConnectionInfo(const ConnectionInfo &info, uint32_t now) {
     bool changed = info.mode != s_conn.mode || strcmp(info.ip, s_conn.ip) != 0;
     s_conn = info;
@@ -359,6 +373,15 @@ void update(uint32_t now) {
             s_lastRetryMs = now;
             s_available = init();
             if (s_available) LOG_I(TAG, "OLED ponovo dostupan");
+        }
+        return;
+    }
+
+    // Tokom ažuriranja iz web interfejsa prikazuje se napredak umesto stranica
+    if (ota_manager::inProgress()) {
+        if (now - s_lastRefreshMs >= OLED_REFRESH_MS) {
+            s_lastRefreshMs = now;
+            showOtaProgress(ota_manager::progress(), ota_manager::target());
         }
         return;
     }

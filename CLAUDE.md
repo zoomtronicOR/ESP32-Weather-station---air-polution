@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The project uses **PlatformIO with the Arduino framework** (pioarduino platform 53.03.13 = Arduino-ESP32 3.1.3 on ESP-IDF 5.3). The user confirmed this choice. Arduino core 3.x APIs differ from 2.x (e.g. `esp_task_wdt_config_t`, the RMT/LEDC APIs), so check that any library you add supports core 3.x.
 
-Development follows the staged plan in spec §19–20. Phases 1–7 are done (firmware v0.5.0). The current status table is in spec §19A. **Next: Phase 8, alarms and diagnostics** (thresholds with hysteresis, active/past alarms, MQTT alarm topics, log view in the UI).
+Development follows the staged plan in spec §19–20. Phases 1–7 and OTA are done (firmware v0.6.0). The current status table is in spec §19A. **Next: Phase 8, alarms and diagnostics** (thresholds with hysteresis, active/past alarms, MQTT alarm topics, log view in the UI).
 
 - `docs/ESP32_R201_Meteo_Stanica_Specifikacija.md`: the full functional and technical spec (in Serbian). It is the source of truth for requirements. Read the relevant section before you implement any module.
 - `docs/Front.jpg` / `docs/Back.jpg`: photos of the actual dev board.
@@ -16,12 +16,18 @@ Git remote `origin` points to the user's GitHub repo. Do not push until the user
 ## Commands
 
 ```
-pio run                          # build
-pio run -t upload                # build + flash (COM7, set in platformio.ini)
-pio run -t uploadfs              # flash LittleFS image from data/
-pio device monitor               # serial monitor (115200, exception decoder)
-pio test -f test_<name>          # run one on-device test suite (test/test_<name>/)
+PIO=~/.platformio/penv/Scripts/pio.exe   # use THIS PlatformIO (6.2.0); the global `pio` (6.1.18) fails with
+                                         # "No module named SCons.Tool.FortranCommon"
+$PIO run                          # build
+$PIO run -e ota -t upload         # flash firmware over Wi-Fi (ArduinoOTA) -- the normal way now
+$PIO run -e ota -t uploadfs       # flash the web UI (data/) over Wi-Fi; history partition is untouched
+$PIO run -t upload                # flash over USB (COM7) -- only when the board is plugged in
+$PIO run -t uploadfs              # web UI over USB
+$PIO device monitor               # serial monitor (115200, exception decoder), USB only
+$PIO test -f test_<name>          # one on-device test suite (test/test_<name>/), USB only
 ```
+
+**The station runs on its own power supply; deploy over OTA.** `env:ota` reads `host` and `password` (the device admin password) from the git-ignored `secrets/ota.ini` (template: `ota.example.ini`). Never write the password anywhere else. If `secrets/ota.ini` is missing, ask the user to create it.
 
 `pio device monitor` is interactive. To capture serial output non-interactively, open COM7 with pyserial from PlatformIO's Python (`~/.platformio/penv/Scripts/python.exe`). Set `dtr=False, rts=False` before `open()`, and pulse RTS to reset the board. The firmware prints Serbian (UTF-8) text, so call `sys.stdout.reconfigure(encoding='utf-8')`, or Windows' cp1252 console will crash on `č/ć/š`.
 
@@ -64,9 +70,10 @@ The project language and all user-facing text (web UI, OLED, log messages, docs,
 - **Phase 6, `mqtt_manager`:** uses ESP-IDF `esp-mqtt` (`mqtt_client.h`), not PubSubClient, so the loop never blocks. Event callbacks run in the MQTT task and only set volatile flags. Publishing happens in the loop via `esp_mqtt_client_enqueue()`. HA Discovery entities are described in `HA_ENTITIES[]` in `mqtt_manager.cpp`, which must stay in `MetricId` order (a `static_assert` checks this). HA expects the Greek μ (U+03BC) in `μg/m³`. Adding a metric now means touching `MetricId`, `DEFS` (`metrics.cpp`) and `HA_ENTITIES`. Firmware size is now ~1.35 MB (≈79 % of the OTA partition).
 - **Phase 7, `storage_manager`** (history): 5-min aggregates `HistRecord` (packed: `ts` + avg/min/max/count per `MetricId`) in ring files `/hist5.bin` (288) and `/hist60.bin` (720), written once per 5 min. **Adding a metric changes the record size, so the files are recreated and history is lost** (the header check catches this). `forEach`/`readRange` are mutex-protected and safe from the web task. `history_api.cpp` serves `/api/v1/history`, `/statistics` and `/history/export`. Large outputs stream via `beginChunkedResponse`, never build them in a `JsonDocument`. Each metric needs a `trendDelta` in `DEFS` (the threshold for "stable").
 - UI text uses only a plain hyphen "-" (the user's request: no em/en dashes or "--"). OLED placeholders `--`/`--:--` stay. Before claiming UI code works, run it through Node with a stubbed DOM (see the chart test approach); `node --check data/app.js` only checks syntax.
+- **OTA (`ota_manager`, v0.6.0):** ArduinoOTA on port 3232 (password = admin password, re-applied after config changes), plus web upload `POST /api/v1/ota/firmware` and `/api/v1/ota/fs` (multipart, auth checked in the first upload chunk via `checkAuth()`). `verifyRollbackLater()` returns true, so a new image stays `PENDING_VERIFY` until `OTA_VERIFY_MS` (60 s) of normal running. A crash or watchdog before that makes the bootloader roll back. ArduinoOTA blocks the loop during transfer, so `onProgress` resets the task watchdog and draws the OLED progress screen directly.
 - Known pitfall: in ESPAsyncWebServer 3.x a plain route `"/api/v1/x"` also matches `"/api/v1/x/..."`. **Register sub-paths before their parent route** (see the comment in `web_server::begin()`).
 - `mqtt_manager::forget(removeFromHa)` clears the MQTT config. With `removeFromHa` and a live connection it first sends empty retained Discovery payloads (`unpublishDiscovery()`, which must list the same entities as `publishDiscovery()`) and then clears after 1.5 s. A factory reset and a Wi-Fi change with `clear_mqtt` delay their disconnect so these messages get sent.
-- The sidebar footer shows "Made by Zoomtronic", the firmware version and the year (from `/api/v1/status`). Bump `FW_VERSION` in `include/config.h` per phase (0.4.0 = Phase 6, 0.5.0 = Phase 7).
+- The sidebar footer shows "Made by Zoomtronic", the firmware version and the year (from `/api/v1/status`). Bump `FW_VERSION` in `include/config.h` per phase (0.4.0 = Phase 6, 0.5.0 = Phase 7, 0.6.0 = OTA).
 - Known pitfall: switching the Wi-Fi driver `WIFI_STA` → `WIFI_AP_STA` immediately after start caused an interrupt-watchdog reset loop with no panic output. With no saved network, start directly in AP+STA.
 
 ## Architecture (as specified)

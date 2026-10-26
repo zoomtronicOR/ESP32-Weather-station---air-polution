@@ -780,6 +780,17 @@ async function pageSystem(main) {
       <button class="btn ghost" id="portal-btn">Pokreni konfiguracioni portal</button>
       <button class="btn danger" id="restart-btn">Restartuj uređaj</button>
     </div></div>
+    <div class="panel"><h3>Ažuriranje firmware-a (OTA)</h3>
+      <p class="small">Trenutna verzija: <b>${esc(s.firmware)}</b> · aktivna particija ${esc(s.ota_partition)}${s.ota_pending_verify ? ' · <b>novi firmware čeka potvrdu</b> (potvrđuje se posle 60 s stabilnog rada)' : ''}</p>
+      <form class="settings" id="ota-form">
+        <label>Firmware (<code>firmware.bin</code>)<input type="file" name="fw" accept=".bin"></label>
+        <label>Web interfejs (<code>littlefs.bin</code>, istorija merenja ostaje)<input type="file" name="fs" accept=".bin"></label>
+        <div class="bar" id="ota-bar" hidden><span style="width:0%"></span></div>
+        <p class="muted small" id="ota-status">Slika se proverava pre upisa (zaglavlje, čip, kontrolni zbir). Ako novi firmware ne radi stabilno,
+          uređaj se sam vraća na prethodnu verziju.</p>
+        <div class="row-end"><button class="btn" type="submit">Pošalji i ažuriraj</button></div>
+      </form>
+    </div>
     <div class="panel"><h3>Fabrička podešavanja</h3>
       <p class="small">Briše sačuvanu Wi-Fi mrežu, administratorsku lozinku i lozinku pristupne tačke, MQTT, NTP i podešavanja prikaza.
         Posle restarta uređaj pokreće konfiguracioni portal <b>METEO-ESP32-SETUP</b>; lozinka pristupne tačke je prikazana na OLED-u.
@@ -787,6 +798,44 @@ async function pageSystem(main) {
       <label class="check"><input type="checkbox" id="factory-remove-ha" checked> Ukloni uređaj iz trenutnog Home Assistant-a (ako je MQTT povezan)</label>
       <div class="actions"><button class="btn danger" id="factory-btn">Vrati fabrička podešavanja</button></div>
     </div>`;
+  $('#ota-form').onsubmit = async (ev) => {
+    ev.preventDefault();
+    const f = ev.target;
+    const file = f.fw.files[0] || f.fs.files[0];
+    if (!file) { banner('Izaberite fajl za ažuriranje.', true); return; }
+    const isFs = !f.fw.files[0];
+    if (!storedAuth() && !(await login())) return;
+    if (!confirm(`Ažurirati ${isFs ? 'web interfejs' : 'firmware'} fajlom ${file.name} (${bytes(file.size)})? Uređaj će se restartovati.`)) return;
+    const bar = $('#ota-bar'), status = $('#ota-status');
+    bar.hidden = false;
+    // XMLHttpRequest umesto fetch-a, zbog praćenja napretka slanja
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `/api/v1/ota/${isFs ? 'fs' : 'firmware'}`);
+    xhr.setRequestHeader('Authorization', 'Basic ' + storedAuth());
+    xhr.upload.onprogress = (e) => {
+      if (!e.lengthComputable) return;
+      const pct = Math.round(e.loaded / e.total * 100);
+      bar.firstElementChild.style.width = pct + '%';
+      status.textContent = `Slanje: ${pct} %`;
+    };
+    xhr.onload = () => {
+      let data = {};
+      try { data = JSON.parse(xhr.responseText); } catch (e) { /* prazan odgovor */ }
+      if (xhr.status === 401) setStoredAuth(null);
+      if (xhr.status === 200) {
+        status.textContent = data.message + ' Stranica će se osvežiti za 20 s.';
+        setTimeout(() => location.reload(), 20000);
+      } else {
+        bar.hidden = true;
+        status.textContent = data.error || `Greška ${xhr.status}`;
+        banner(status.textContent, true);
+      }
+    };
+    xhr.onerror = () => { status.textContent = 'Veza sa uređajem je prekinuta.'; };
+    const form = new FormData();
+    form.append('file', file, file.name);
+    xhr.send(form);
+  };
   $('#factory-btn').onclick = async () => {
     if (!confirm('Obrisati SVA podešavanja (Wi-Fi, lozinke, MQTT, NTP, prikaz) i restartovati uređaj?')) return;
     if (!confirm('Da li ste sigurni? Uređaj će izaći iz ove Wi-Fi mreže i pokrenuti portal za podešavanje.')) return;

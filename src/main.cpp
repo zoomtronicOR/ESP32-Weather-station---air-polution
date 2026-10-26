@@ -13,6 +13,7 @@
 #include "log.h"
 #include "metrics.h"
 #include "mqtt_manager.h"
+#include "ota_manager.h"
 #include "pins.h"
 #include "sensor_manager.h"
 #include "status_led.h"
@@ -166,6 +167,7 @@ void setup() {
     storage_manager::begin();  // LittleFS i fajlovi istorije
     wifi_manager::begin(millis());
     web_server::begin();  // posle Wi-Fi-ja, jer mrežni sloj mora biti pokrenut
+    ota_manager::begin();
     printHelp();
 }
 
@@ -181,6 +183,7 @@ void loop() {
     wifi_manager::update(now);
     time_manager::update(now, wifi_manager::connected());
     mqtt_manager::update(now, wifi_manager::connected());
+    ota_manager::update(now, wifi_manager::connected());
     web_server::update(now);
 
     if (now - s_lastConnInfoMs >= 500) {
