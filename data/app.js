@@ -742,8 +742,15 @@ async function pageMqtt(main) {
 // ---------------------------------------------------------------------------
 
 function alarmBanner(s) {
-  if (!s || !s.alarms_active) return '';
-  return `<a class="notice warn alarm-banner" href="#alarmi">⚠️ Aktivnih alarma: <b>${s.alarms_active}</b> - otvori Alarmiranje</a>`;
+  let html = '';
+  // Bezbednost (specifikacija §14): podsetnik dok važi podrazumevana lozinka
+  if (s && s.admin_password_set === false) {
+    html += '<a class="notice warn alarm-banner" href="#podesavanja">🔑 Koristi se podrazumevana administratorska lozinka - promenite je u Podešavanja → Pristup</a>';
+  }
+  if (s && s.alarms_active) {
+    html += `<a class="notice warn alarm-banner" href="#alarmi">⚠️ Aktivnih alarma: <b>${s.alarms_active}</b> - otvori Alarmiranje</a>`;
+  }
+  return html;
 }
 
 function fmtEventTime(e) {
@@ -1215,7 +1222,7 @@ async function pageHistory(main) {
       renderCharts();
     };
     $('#hist-clear').onclick = async () => {
-      if (!confirm('Obrisati celu lokalnu istoriju merenja? Ova radnja se ne može poništiti.')) return;
+      if (!confirm('Obrisati celu lokalnu istoriju merenja i istoriju alarma? Particija istorije se formatira; radnja se ne može poništiti.')) return;
       try { banner((await adminApi('/history/clear')).message); setTimeout(() => pageHistory(main), 1500); } catch (e) { banner(e.message, true); }
     };
     if (!state.historyResize) {

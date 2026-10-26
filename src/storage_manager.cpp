@@ -306,10 +306,16 @@ void update(uint32_t now) {
 
 void clear() {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
+    // Cela particija se formatira: brišu se i događaji alarma i eventualni zaostali fajlovi
+    esp_task_wdt_reset();
+    s_fs.end();
+    bool formatted = s_fs.format();
+    esp_task_wdt_reset();
+    if (!s_fs.begin(true, "/hist", 4, "history")) LOG_E(TAG, "Particija istorije nije dostupna posle formatiranja");
     for (Ring &rg : s_rings) {
-        s_fs.remove(rg.path);
         rg.ok = createRing(rg);
     }
+    if (!formatted) LOG_W(TAG, "Formatiranje nije uspelo -- fajlovi istorije su napravljeni iznova");
     accReset(s_hourAcc);
     s_hourId = 0;
     s_pendingCount = 0;

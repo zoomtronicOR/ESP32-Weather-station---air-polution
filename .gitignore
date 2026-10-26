@@ -23,3 +23,6 @@ Desktop.ini
 
 # Lokalne tajne (OTA lozinka i sl.)
 secrets/
+
+# Rezultati dugotrajnog testa
+soak/

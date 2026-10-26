@@ -131,7 +131,10 @@ void update(uint32_t now) {
         else wifi_manager::reconnect(now);
     }
     if (actions & ACT_PORTAL) wifi_manager::startPortal(now);
-    if (actions & ACT_HISTORY_CLEAR) storage_manager::clear();
+    if (actions & ACT_HISTORY_CLEAR) {
+        storage_manager::clear();
+        alarm_manager::clearEvents();  // fajl događaja je bio na istoj particiji
+    }
     if (actions & ACT_ALARM_CONFIG) {
         if (lock()) {
             for (size_t i = 0; i < alarm_manager::ruleCount() && i < 16; i++) {
