@@ -16,6 +16,7 @@ Home Assistant preko MQTT-a i ažurira se preko Wi-Fi-ja (OTA). Radi i bez inter
   istorija sa grafikonima (1 h - 30 dana), statistika, senzori sa šemom povezivanja, MQTT, Wi-Fi, podešavanja,
   alarmiranje, sistem (resursi, logovi, OTA).
 - **Istorija:** 5-minutni agregati za 24 h i satni za 30 dana u LittleFS (posebna particija), izvoz CSV/JSON.
+  Zapisi se samo dopisuju u male segmente (bez prepisivanja velikih fajlova), radi trajnosti flash-a.
 - **Alarmi:** 12 pravila sa pragom, histerezom i minimalnim trajanjem (temperatura, vlažnost, pritisak,
   PM, UV, senzori, Wi-Fi, MQTT, vreme, memorija).
 - **Home Assistant:** MQTT Discovery za sve senzore, alarme, LED indikator i dugme za restart.
@@ -84,6 +85,8 @@ pio run -e ota -t uploadfs    # web interfejs (istorija merenja ostaje sačuvana
 
 - REST: `/api/v1/status`, `readings`, `sensors`, `history`, `statistics`, `alarms`, `time`, `wifi`, `mqtt`,
   `config`, `system`, `logs`, `led`. Izmene (POST) traže administratorsku prijavu (HTTP Basic, korisnik `admin`).
+- Dijagnostika: posle pada firmware-a sažetak je u `/api/v1/system` (`last_crash`), a ceo coredump se preuzima
+  sa `/api/v1/system/coredump` (uz prijavu) i dekodira alatom `esp-coredump` uz ELF iste verzije.
 - MQTT: osnovni topic `meteo/esp32_r201/`, pojedinačne vrednosti (`.../temperature`, `.../pm2_5`, ...),
   objedinjeni JSON `.../state`, dostupnost `.../availability` (LWT), alarmi `.../alarm/<id>`.
 
