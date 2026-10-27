@@ -954,6 +954,7 @@ async function pageSystem(main) {
       <tr><td class="k">Slobodna memorija</td><td>${bytes(s.heap_free)} (najmanje ${bytes(s.heap_min_free)}, najveći blok ${bytes(s.heap_max_block)})</td></tr>
       <tr><td class="k">Vreme rada</td><td>${duration(s.uptime_s)}</td></tr>
       <tr><td class="k">Razlog poslednjeg restarta</td><td>${esc(s.reset_reason)}</td></tr>
+      ${s.last_crash ? `<tr><td class="k">Poslednji pad (coredump)</td><td><code class="small">${esc(s.last_crash)}</code></td></tr>` : ''}
       <tr><td class="k">Broj pokretanja</td><td>${s.boot_count}</td></tr>
       <tr><td class="k">Statusna LED</td><td>${esc(s.status_led)}${s.status_led_enabled ? '' : ' (dioda isključena)'}</td></tr>
       <tr><td class="k">MAC adresa</td><td>${esc(s.mac)}</td></tr>

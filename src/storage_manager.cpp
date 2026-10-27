@@ -11,31 +11,42 @@ namespace storage_manager {
 
 static const char *TAG = "istorija";
 
-static constexpr uint32_t MAGIC = 0x4D545231;  // "MTR1"
-static constexpr uint16_t VERSION = 1;
 static constexpr size_t METRICS = (size_t)MetricId::Count;
 
-struct __attribute__((packed)) RingHeader {
+// Kružni niz je podeljen na segmente (zasebne male fajlove) u koje se zapisi samo dopisuju.
+// LittleFS pri izmeni sredine fajla prepisuje sve od tog mesta do kraja, pa bi kružni niz u jednom
+// fajlu sa zaglavljem na početku pri svakom upisu prepisivao ceo fajl (satni ~154 KB) -- to troši
+// flash i ne staje na particiju. Segment je manji od jednog bloka flash-a.
+static constexpr uint16_t SEG_RECORDS = 16;
+static constexpr uint32_t SEG_MAGIC = 0x4D545232;  // "MTR2"
+
+struct __attribute__((packed)) SegHeader {
     uint32_t magic;
-    uint16_t version;
     uint16_t metricCount;
     uint16_t recordSize;
-    uint16_t capacity;
-    uint16_t head;   // indeks sledećeg upisa
-    uint16_t count;  // broj važećih zapisa
+    uint32_t seq;  // redni broj segmenta; najveći je tekući
 };
 
+static_assert(HISTORY_5MIN_RECORDS % SEG_RECORDS == 0, "kapacitet mora biti deljiv veličinom segmenta");
+static_assert(HISTORY_HOUR_RECORDS % SEG_RECORDS == 0, "kapacitet mora biti deljiv veličinom segmenta");
+static constexpr size_t MAX_SEGS = HISTORY_HOUR_RECORDS / SEG_RECORDS + 1;
+
 struct Ring {
-    const char *path;
+    const char *dir;
+    const char *legacyPath;  // jedan fajl sa zaglavljem (format do v0.8.0), prenosi se pri prvom pokretanju
     uint16_t capacity;
     uint32_t interval;
-    RingHeader hdr;
+    uint16_t segs;           // capacity / SEG_RECORDS + 1 (tekući segment se puni dok najstariji još važi)
+    uint16_t head;           // tekući segment
+    uint32_t headSeq;
+    uint8_t fill[MAX_SEGS];  // broj zapisa po segmentu
+    size_t total;            // ukupno zapisa u svim segmentima (do capacity + SEG_RECORDS)
     bool ok;
 };
 
 static Ring s_rings[2] = {
-    {"/hist5.bin", HISTORY_5MIN_RECORDS, 300, {}, false},
-    {"/hist60.bin", HISTORY_HOUR_RECORDS, 3600, {}, false},
+    {"/h5", "/hist5.bin", HISTORY_5MIN_RECORDS, 300, HISTORY_5MIN_RECORDS / SEG_RECORDS + 1, 0, 0, {}, 0, false},
+    {"/h60", "/hist60.bin", HISTORY_HOUR_RECORDS, 3600, HISTORY_HOUR_RECORDS / SEG_RECORDS + 1, 0, 0, {}, 0, false},
 };
 
 static SemaphoreHandle_t s_mutex = nullptr;
@@ -45,61 +56,155 @@ static fs::LittleFSFS s_fs;
 
 static Ring &ring(Resolution r) { return s_rings[r == Resolution::Min5 ? 0 : 1]; }
 
+static size_t ringCount(const Ring &rg) { return rg.total < rg.capacity ? rg.total : rg.capacity; }
+
 // ---------------------------------------------------------------------------
-// Kružni fajl
+// Kružni niz u segmentima
 // ---------------------------------------------------------------------------
 
-static bool createRing(Ring &rg) {
-    File f = s_fs.open(rg.path, "w");
-    if (!f) return false;
-    rg.hdr = {MAGIC, VERSION, (uint16_t)METRICS, (uint16_t)sizeof(HistRecord), rg.capacity, 0, 0};
-    f.write((const uint8_t *)&rg.hdr, sizeof(rg.hdr));
-    // Fajl se odmah pravi u punoj veličini, da kasniji upisi ne menjaju njegovu dužinu
-    HistRecord empty = {};
-    for (uint16_t i = 0; i < rg.capacity; i++) {
-        f.write((const uint8_t *)&empty, sizeof(empty));
-        if ((i & 0x1F) == 0) esp_task_wdt_reset();  // prvo pravljenje fajla traje i do nekoliko sekundi
-    }
-    f.close();
-    return true;
+static void segPath(const Ring &rg, uint16_t seg, char *buf, size_t len) {
+    snprintf(buf, len, "%s/%02u.bin", rg.dir, (unsigned)seg);
 }
 
-static bool openRing(Ring &rg) {
-    size_t expected = sizeof(RingHeader) + (size_t)rg.capacity * sizeof(HistRecord);
-    File f = s_fs.open(rg.path, "r");
-    if (f) {
-        bool good = f.size() == expected && f.read((uint8_t *)&rg.hdr, sizeof(rg.hdr)) == sizeof(rg.hdr) &&
-                    rg.hdr.magic == MAGIC && rg.hdr.version == VERSION && rg.hdr.metricCount == METRICS &&
-                    rg.hdr.recordSize == sizeof(HistRecord) && rg.hdr.capacity == rg.capacity &&
-                    rg.hdr.head < rg.capacity && rg.hdr.count <= rg.capacity;
-        f.close();
-        if (good) return true;
-        // Promenjen format (npr. nova metrika) ili oštećen fajl -- istorija se počinje iznova
-        LOG_W(TAG, "%s: nepoznat ili oštećen format, pravi se novi fajl", rg.path);
-    }
-    return createRing(rg);
-}
-
-static bool appendRecord(Ring &rg, const HistRecord &rec) {
-    File f = s_fs.open(rg.path, "r+");
+static bool startSegment(Ring &rg, uint16_t seg, uint32_t seq) {
+    char path[24];
+    segPath(rg, seg, path, sizeof(path));
+    File f = s_fs.open(path, "w");
     if (!f) return false;
-    bool ok = f.seek(sizeof(RingHeader) + (size_t)rg.hdr.head * sizeof(HistRecord)) &&
-              f.write((const uint8_t *)&rec, sizeof(rec)) == sizeof(rec);
-    if (ok) {
-        rg.hdr.head = (rg.hdr.head + 1) % rg.capacity;
-        if (rg.hdr.count < rg.capacity) rg.hdr.count++;
-        ok = f.seek(0) && f.write((const uint8_t *)&rg.hdr, sizeof(rg.hdr)) == sizeof(rg.hdr);
-    }
+    SegHeader h = {SEG_MAGIC, (uint16_t)METRICS, (uint16_t)sizeof(HistRecord), seq};
+    bool ok = f.write((const uint8_t *)&h, sizeof(h)) == sizeof(h);
     f.close();
+    rg.total -= rg.fill[seg];
+    rg.fill[seg] = 0;
+    rg.head = seg;
+    rg.headSeq = seq;
     return ok;
 }
 
-static bool readRecordLocked(Ring &rg, File &f, size_t indexFromOldest, HistRecord &out) {
-    if (indexFromOldest >= rg.hdr.count) return false;
-    size_t oldest = (rg.hdr.head + rg.capacity - rg.hdr.count) % rg.capacity;
-    size_t slot = (oldest + indexFromOldest) % rg.capacity;
-    return f.seek(sizeof(RingHeader) + slot * sizeof(HistRecord)) &&
-           f.read((uint8_t *)&out, sizeof(out)) == sizeof(out);
+static bool appendRecord(Ring &rg, const HistRecord &rec) {
+    if (rg.fill[rg.head] >= SEG_RECORDS) {
+        // Tekući segment je pun: prelazi se na sledeći, čime se briše najstariji
+        if (!startSegment(rg, (rg.head + 1) % rg.segs, rg.headSeq + 1)) return false;
+    }
+    char path[24];
+    segPath(rg, rg.head, path, sizeof(path));
+    File f = s_fs.open(path, "a");
+    if (!f) return false;
+    bool ok = f.write((const uint8_t *)&rec, sizeof(rec)) == sizeof(rec);
+    f.close();
+    if (ok) {
+        rg.fill[rg.head]++;
+        rg.total++;
+    }
+    return ok;
+}
+
+// Učitava stanje segmenata posle pokretanja
+static bool openRing(Ring &rg) {
+    if (!s_fs.exists(rg.dir) && !s_fs.mkdir(rg.dir)) return false;
+    uint32_t seqs[MAX_SEGS] = {};
+    bool any = false, foreign = false;
+    for (uint16_t s = 0; s < rg.segs; s++) {
+        rg.fill[s] = 0;
+        char path[24];
+        segPath(rg, s, path, sizeof(path));
+        if (!s_fs.exists(path)) continue;
+        File f = s_fs.open(path, "r");
+        SegHeader h;
+        bool good = f && f.size() >= sizeof(h) && f.read((uint8_t *)&h, sizeof(h)) == sizeof(h) &&
+                    h.magic == SEG_MAGIC && h.metricCount == METRICS && h.recordSize == sizeof(HistRecord);
+        if (good) {
+            size_t n = (f.size() - sizeof(h)) / sizeof(HistRecord);  // nepotpun poslednji zapis se zanemaruje
+            rg.fill[s] = n > SEG_RECORDS ? SEG_RECORDS : n;
+            seqs[s] = h.seq;
+            if (!any || h.seq > rg.headSeq) {
+                rg.head = s;
+                rg.headSeq = h.seq;
+            }
+            any = true;
+        }
+        if (f) f.close();
+        if (!good) {
+            // Promenjen format (npr. nova metrika) ili oštećen segment
+            foreign = true;
+            s_fs.remove(path);
+        }
+    }
+    if (foreign) LOG_W(TAG, "%s: segmenti nepoznatog formata su obrisani", rg.dir);
+    rg.total = 0;
+    if (!any) return startSegment(rg, 0, 1);
+    // Važe samo segmenti čiji redni broj odgovara položaju iza tekućeg (ostali su zaostali)
+    for (uint16_t back = 0; back < rg.segs; back++) {
+        uint16_t s = (rg.head + rg.segs - back) % rg.segs;
+        if (seqs[s] != rg.headSeq - back) rg.fill[s] = 0;
+        rg.total += rg.fill[s];
+    }
+    return true;
+}
+
+// Logički indeks (0 = najstariji od poslednjih capacity zapisa) -> segment i položaj u njemu
+static bool locate(const Ring &rg, size_t index, uint16_t &seg, size_t &pos) {
+    size_t count = ringCount(rg);
+    if (index >= count) return false;
+    size_t g = (rg.total - count) + index;
+    for (uint16_t j = 1; j <= rg.segs; j++) {
+        uint16_t s = (rg.head + j) % rg.segs;  // od najstarijeg ka tekućem
+        if (g < rg.fill[s]) {
+            seg = s;
+            pos = g;
+            return true;
+        }
+        g -= rg.fill[s];
+    }
+    return false;
+}
+
+// Sekvencijalno čitanje: fajl segmenta ostaje otvoren dok se čita iz istog segmenta
+struct Reader {
+    File f;
+    int seg = -1;
+};
+
+static bool readRecordLocked(Ring &rg, Reader &rd, size_t index, HistRecord &out) {
+    uint16_t seg;
+    size_t pos;
+    if (!locate(rg, index, seg, pos)) return false;
+    if (rd.seg != seg) {
+        if (rd.f) rd.f.close();
+        char path[24];
+        segPath(rg, seg, path, sizeof(path));
+        rd.f = s_fs.open(path, "r");
+        rd.seg = seg;
+    }
+    return rd.f && rd.f.seek(sizeof(SegHeader) + pos * sizeof(HistRecord)) &&
+           rd.f.read((uint8_t *)&out, sizeof(out)) == sizeof(out);
+}
+
+// Istorija iz jednog fajla (format do v0.8.0) se prenosi u segmente, a stari fajl briše
+static void migrateLegacy(Ring &rg) {
+    struct __attribute__((packed)) LegacyHeader {
+        uint32_t magic;
+        uint16_t version, metricCount, recordSize, capacity, head, count;
+    } h;
+    if (!s_fs.exists(rg.legacyPath)) return;
+    File f = s_fs.open(rg.legacyPath, "r");
+    size_t moved = 0;
+    if (f && f.read((uint8_t *)&h, sizeof(h)) == sizeof(h) && h.magic == 0x4D545231 && h.version == 1 &&
+        h.metricCount == METRICS && h.recordSize == sizeof(HistRecord) && h.capacity > 0 &&
+        h.head < h.capacity && h.count <= h.capacity && rg.total == 0) {
+        size_t oldest = (h.head + h.capacity - h.count) % h.capacity;
+        HistRecord rec;
+        for (size_t i = 0; i < h.count; i++) {
+            size_t slot = (oldest + i) % h.capacity;
+            if (!f.seek(sizeof(h) + slot * sizeof(HistRecord)) || f.read((uint8_t *)&rec, sizeof(rec)) != sizeof(rec))
+                break;
+            if (rec.ts != 0 && appendRecord(rg, rec)) moved++;
+            esp_task_wdt_reset();
+        }
+    }
+    if (f) f.close();
+    s_fs.remove(rg.legacyPath);
+    LOG_I(TAG, "%s: preneto %u zapisa u novi format (%s)", rg.legacyPath, (unsigned)moved, rg.dir);
 }
 
 // ---------------------------------------------------------------------------
@@ -172,13 +277,12 @@ static void rebuildHour(uint32_t hour) {
     Ring &rg = ring(Resolution::Min5);
     accReset(s_hourAcc);
     s_hourId = hour;
-    File f = s_fs.open(rg.path, "r");
-    if (!f) return;
+    Reader rd;
     HistRecord rec;
-    size_t n = rg.hdr.count;
+    size_t n = ringCount(rg);
     size_t start = n > 12 ? n - 12 : 0;
     for (size_t i = start; i < n; i++) {
-        if (!readRecordLocked(rg, f, i, rec) || rec.ts / 3600 != hour) continue;
+        if (!readRecordLocked(rg, rd, i, rec) || rec.ts / 3600 != hour) continue;
         for (size_t m = 0; m < METRICS; m++) {
             const MetricAgg &a = rec.m[m];
             if (a.count == 0) continue;
@@ -188,7 +292,7 @@ static void rebuildHour(uint32_t hour) {
             s_hourAcc[m].max = max(s_hourAcc[m].max, a.max);
         }
     }
-    f.close();
+    if (rd.f) rd.f.close();
 }
 
 static void storeRecord(const HistRecord &rec) {
@@ -256,11 +360,16 @@ void begin() {
     for (Ring &rg : s_rings) {
         rg.ok = openRing(rg);
         if (rg.ok) {
-            LOG_I(TAG, "%s: %u / %u zapisa (interval %lu s)", rg.path, rg.hdr.count, rg.capacity,
+            migrateLegacy(rg);
+            LOG_I(TAG, "%s: %u / %u zapisa (interval %lu s)", rg.dir, (unsigned)ringCount(rg), rg.capacity,
                   (unsigned long)rg.interval);
         } else {
-            LOG_E(TAG, "%s: fajl nije dostupan", rg.path);
+            LOG_E(TAG, "%s: istorija nije dostupna", rg.dir);
         }
+    }
+    // Zaostali web fajlovi sa ranije pogrešno upisane slike particije
+    for (const char *junk : {"/index.html", "/app.js", "/style.css", "/favicon.svg"}) {
+        if (s_fs.exists(junk)) s_fs.remove(junk);
     }
     accReset(s_acc);
     accReset(s_hourAcc);
@@ -284,8 +393,8 @@ void update(uint32_t now) {
 
     bool timeValid = time_manager::isValid();
     if (timeValid && !s_bucketAligned) {
-        // Vreme je upravo postalo pouzdano: tekući interval se zatvara, a zatim se prelazi na poravnate
-        closeBucket(now);
+        // Vreme je upravo postalo pouzdano: raniji intervali dobijaju vreme unazad, a tekući se nastavlja
+        // kao poravnat (da vremenske oznake u istoriji uvek rastu)
         flushPending();
         s_bucketAligned = true;
         s_bucketId = (uint32_t)time_manager::nowUtc() / 300;
@@ -313,7 +422,7 @@ void clear() {
     esp_task_wdt_reset();
     if (!s_fs.begin(true, "/hist", 4, "history")) LOG_E(TAG, "Particija istorije nije dostupna posle formatiranja");
     for (Ring &rg : s_rings) {
-        rg.ok = createRing(rg);
+        rg.ok = openRing(rg);
     }
     if (!formatted) LOG_W(TAG, "Formatiranje nije uspelo -- fajlovi istorije su napravljeni iznova");
     accReset(s_hourAcc);
@@ -323,7 +432,7 @@ void clear() {
     LOG_W(TAG, "Istorija je obrisana");
 }
 
-size_t count(Resolution r) { return ring(r).hdr.count; }
+size_t count(Resolution r) { return ringCount(ring(r)); }
 
 size_t capacity(Resolution r) { return ring(r).capacity; }
 
@@ -343,14 +452,13 @@ void forEach(Resolution r, uint32_t from, const std::function<void(const HistRec
     Ring &rg = ring(r);
     if (!rg.ok) return;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    File f = s_fs.open(rg.path, "r");
-    if (f) {
-        HistRecord rec;
-        for (size_t i = 0; i < rg.hdr.count; i++) {
-            if (readRecordLocked(rg, f, i, rec) && rec.ts >= from) fn(rec);
-        }
-        f.close();
+    Reader rd;
+    HistRecord rec;
+    size_t n = ringCount(rg);
+    for (size_t i = 0; i < n; i++) {
+        if (readRecordLocked(rg, rd, i, rec) && rec.ts >= from) fn(rec);
     }
+    if (rd.f) rd.f.close();
     xSemaphoreGive(s_mutex);
 }
 
@@ -359,11 +467,9 @@ size_t readRange(Resolution r, size_t start, HistRecord *out, size_t n) {
     if (!rg.ok) return 0;
     size_t got = 0;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    File f = s_fs.open(rg.path, "r");
-    if (f) {
-        while (got < n && readRecordLocked(rg, f, start + got, out[got])) got++;
-        f.close();
-    }
+    Reader rd;
+    while (got < n && readRecordLocked(rg, rd, start + got, out[got])) got++;
+    if (rd.f) rd.f.close();
     xSemaphoreGive(s_mutex);
     return got;
 }
@@ -372,12 +478,9 @@ bool readAt(Resolution r, size_t index, HistRecord &out) {
     Ring &rg = ring(r);
     if (!rg.ok) return false;
     xSemaphoreTake(s_mutex, portMAX_DELAY);
-    bool ok = false;
-    File f = s_fs.open(rg.path, "r");
-    if (f) {
-        ok = readRecordLocked(rg, f, index, out);
-        f.close();
-    }
+    Reader rd;
+    bool ok = readRecordLocked(rg, rd, index, out);
+    if (rd.f) rd.f.close();
     xSemaphoreGive(s_mutex);
     return ok;
 }

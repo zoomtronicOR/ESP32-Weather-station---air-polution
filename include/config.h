@@ -3,7 +3,7 @@
 // Osnovni parametri firmware-a
 
 #define DEVICE_NAME       "esp32_r201"
-#define FW_VERSION        "0.8.0"
+#define FW_VERSION        "0.8.1"
 
 #define SERIAL_BAUD       115200
 

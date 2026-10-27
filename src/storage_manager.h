@@ -9,7 +9,7 @@
 // Lokalna istorija merenja u LittleFS (specifikacija §9)
 // - 5-minutni agregati (min/max/prosek/broj) za poslednja 24 h
 // - satni agregati za poslednjih 30 dana
-// Oba skupa su kružni fajlovi fiksne veličine; najstariji zapisi se prepisuju.
+// Oba skupa su kružni nizovi segmenata (/h5, /h60) u koje se samo dopisuje; najstariji segment se briše.
 // U flash se upisuje jednom na 5 min, nikada svaki uzorak.
 
 namespace storage_manager {

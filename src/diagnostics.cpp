@@ -1,6 +1,7 @@
 #include "diagnostics.h"
 
 #include <Preferences.h>
+#include <esp_core_dump.h>
 
 #include "config.h"
 #include "log.h"
@@ -11,6 +12,29 @@ static const char *TAG = "diag";
 
 static uint32_t s_bootCount = 0;
 static esp_reset_reason_t s_resetReason = ESP_RST_UNKNOWN;
+static char s_crash[256] = "";
+
+// Posle pada (panic, watchdog) ESP-IDF upisuje coredump u flash; ovde se čita samo sažetak.
+// Adrese se dekodiraju na računaru: xtensa-esp32-elf-addr2line -pfiaC -e firmware.elf <adrese>
+static void readCoreDump() {
+    if (esp_core_dump_image_check() != ESP_OK) return;
+    esp_core_dump_summary_t *sum = (esp_core_dump_summary_t *)malloc(sizeof(esp_core_dump_summary_t));
+    if (!sum) return;
+    if (esp_core_dump_get_summary(sum) == ESP_OK) {
+        int n = snprintf(s_crash, sizeof(s_crash), "zadatak %s, PC 0x%08lx, elf %02x%02x%02x%02x, bt", sum->exc_task,
+                         (unsigned long)sum->exc_pc, sum->app_elf_sha256[0], sum->app_elf_sha256[1],
+                         sum->app_elf_sha256[2], sum->app_elf_sha256[3]);
+        for (uint32_t i = 0; i < sum->exc_bt_info.depth && n > 0 && n < (int)sizeof(s_crash) - 12; i++) {
+            n += snprintf(s_crash + n, sizeof(s_crash) - n, " 0x%08lx", (unsigned long)sum->exc_bt_info.bt[i]);
+        }
+        // Coredump ostaje u flash-u do sledećeg pada; upozorenje samo kada je ovo pokretanje posle pada
+        bool afterCrash = s_resetReason == ESP_RST_PANIC || s_resetReason == ESP_RST_INT_WDT ||
+                          s_resetReason == ESP_RST_TASK_WDT || s_resetReason == ESP_RST_WDT;
+        if (afterCrash) LOG_W(TAG, "Pad: %s", s_crash);
+        else LOG_I(TAG, "Poslednji zabeleženi pad (raniji): %s", s_crash);
+    }
+    free(sum);
+}
 
 void begin() {
     s_resetReason = esp_reset_reason();
@@ -36,7 +60,10 @@ void begin() {
     } else if (s_resetReason == ESP_RST_PANIC) {
         LOG_W(TAG, "Restart zbog greške u firmware-u (panic)");
     }
+    readCoreDump();
 }
+
+const char *lastCrash() { return s_crash; }
 
 void printChipInfo() {
     uint64_t mac = ESP.getEfuseMac();

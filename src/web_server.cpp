@@ -5,6 +5,8 @@
 #include <ESPAsyncWebServer.h>
 #include <LittleFS.h>
 #include <WiFi.h>
+#include <esp_core_dump.h>
+#include <esp_flash.h>
 #include <sys/time.h>
 
 #include "air_quality.h"
@@ -282,6 +284,23 @@ static bool requireAuth(AsyncWebServerRequest *req) {
         return false;
     }
     return true;
+}
+
+// Sirovi coredump poslednjeg pada (za esp-coredump na računaru); samo uz prijavu
+static void handleCoreDump(AsyncWebServerRequest *req) {
+    if (!requireAuth(req)) return;
+    size_t addr = 0, size = 0;
+    if (esp_core_dump_image_check() != ESP_OK || esp_core_dump_image_get(&addr, &size) != ESP_OK || size == 0) {
+        return sendError(req, 404, "Nema sačuvanog coredump-a.");
+    }
+    AsyncWebServerResponse *res = req->beginResponse(
+        "application/octet-stream", size, [addr, size](uint8_t *buf, size_t maxLen, size_t index) -> size_t {
+            size_t n = size - index < maxLen ? size - index : maxLen;
+            if (n == 0 || esp_flash_read(nullptr, buf, addr + index, n) != ESP_OK) return 0;
+            return n;
+        });
+    res->addHeader("Content-Disposition", "attachment; filename=\"coredump.bin\"");
+    req->send(res);
 }
 
 // ---------------------------------------------------------------------------
@@ -688,6 +707,7 @@ static void handleSystem(AsyncWebServerRequest *req) {
     doc["uptime_s"] = millis() / 1000;
     doc["reset_reason"] = diagnostics::resetReasonText(diagnostics::resetReason());
     doc["boot_count"] = diagnostics::bootCount();
+    if (diagnostics::lastCrash()[0]) doc["last_crash"] = diagnostics::lastCrash();
     doc["heap_total"] = ESP.getHeapSize();
     doc["heap_free"] = ESP.getFreeHeap();
     doc["heap_min_free"] = ESP.getMinFreeHeap();
@@ -1237,6 +1257,7 @@ void begin() {
     s_server.on("/api/v1/config", HTTP_POST, handleConfigPost);
     s_server.on("/api/v1/mqtt", HTTP_GET, handleMqtt);
     s_server.on("/api/v1/mqtt", HTTP_POST, handleMqttPost);
+    s_server.on("/api/v1/system/coredump", HTTP_GET, handleCoreDump);  // pre roditeljske rute
     s_server.on("/api/v1/system", HTTP_GET, handleSystem);
     s_server.on("/api/v1/auth", HTTP_POST, [](AsyncWebServerRequest *req) {
         if (requireAuth(req)) sendOk(req, "Prijava uspešna.");

@@ -46,6 +46,10 @@ static bool s_available = false;
 static uint8_t s_address = 0x3C;
 static uint32_t s_lastRetryMs = 0;
 static uint32_t s_lastRefreshMs = 0;
+// Slika se šalje red po red (8 redova po 8 piksela), jedan red po prolazu petlje: ako I2C magistrala
+// zakaže usred slanja, petlja ne čeka na ceo ekran (~40 transakcija) i ne aktivira watchdog
+static constexpr uint8_t TILE_ROWS = 8;
+static uint8_t s_sendRow = TILE_ROWS;  // TILE_ROWS = nema slanja u toku
 
 static Screen s_screen = Screen::Splash;
 static uint32_t s_screenStartMs = 0;
@@ -386,6 +390,18 @@ void update(uint32_t now) {
         return;
     }
 
+    if (s_sendRow < TILE_ROWS) {
+        s_oled.updateDisplayArea(0, s_sendRow, 16, 1);
+        s_sendRow++;
+        if (!i2c_bus::probe(Wire, s_address)) {
+            s_sendRow = TILE_ROWS;
+            s_available = false;
+            s_lastRetryMs = now;
+            LOG_W(TAG, "OLED ne odgovara tokom slanja -- novi pokušaj za %lu s", (unsigned long)(OLED_RETRY_MS / 1000));
+        }
+        return;
+    }
+
     uint8_t prevPage = s_page;
     Screen prevScreen = s_screen;
     advanceScreen(now);
@@ -422,7 +438,7 @@ void update(uint32_t now) {
     s_oled.clearBuffer();
     drawHeader();
     drawContent(c);
-    s_oled.sendBuffer();
+    s_sendRow = 0;  // slanje počinje u sledećem prolazu petlje
 }
 
 }  // namespace display_manager
