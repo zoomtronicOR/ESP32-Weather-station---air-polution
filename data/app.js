@@ -632,6 +632,42 @@ async function pageSettings(main) {
           placeholder="${c.ap_password_custom ? 'promenjena' : 'podrazumevana, prikazuje se na OLED-u'}"></label>
         <div class="row-end"><button class="btn" type="submit">Sačuvaj</button></div>
       </form>
+    </div>
+    <div class="panel guide"><h3>Premeštanje na drugu mrežu i drugi Home Assistant</h3>
+      <p class="muted small">Merenja i istorija se čuvaju na samoj stanici i ostaju sačuvani posle premeštanja.</p>
+      <h4>1. Pre polaska, na staroj lokaciji (preporučeno)</h4>
+      <ol>
+        <li>Na stranici <a href="#mqtt">MQTT</a> kliknite <b>Obriši MQTT podešavanja</b>, uz štikliranu opciju <b>Ukloni uređaj iz trenutnog Home Assistant-a</b>.
+          Stanica iz starog HA uklanja sve svoje entitete i briše MQTT podešavanja.</li>
+        <li>Isključite stanicu i odnesite je.</li>
+      </ol>
+      <p class="muted small">Ako ovaj korak preskočite, u starom HA ostaje uređaj bez veze; obrišite ga ručno
+        (Podešavanja - Uređaji - MQTT - Meteo stanica - Obriši).</p>
+      <h4>2. Na novoj lokaciji: novi Wi-Fi</h4>
+      <ol>
+        <li>Uključite stanicu. Posle tri neuspela pokušaja povezivanja na staru mrežu (oko 1 min) sama pokreće konfiguracioni portal.
+          Portal se pokreće i držanjem tastera BOOT 5 s.</li>
+        <li>OLED prikazuje mrežu <b>METEO-ESP32-SETUP</b>, njenu lozinku i adresu.</li>
+        <li>Telefonom se povežite na tu mrežu i otvorite <b>http://192.168.4.1</b>.</li>
+        <li>Izaberite novu Wi-Fi mrežu i upišite lozinku. Ako korak 1 niste uradili, štiklirajte
+          <b>Obriši MQTT podešavanja (nova lokacija / drugi Home Assistant)</b>.</li>
+        <li>Posle povezivanja OLED prikazuje novu IP adresu; portal se gasi posle 1 min.</li>
+        <li>Web interfejs je na <b>http://&lt;nova IP adresa&gt;</b> ili <b>http://${esc(c.hostname)}.local</b>. Administratorska lozinka ostaje ista.</li>
+      </ol>
+      <h4>3. Novi Home Assistant</h4>
+      <ol>
+        <li>U Home Assistant-u treba da postoje MQTT broker (npr. dodatak Mosquitto broker) i integracija MQTT.
+          Napravite korisnika za stanicu (Podešavanja - Osobe - Korisnici).</li>
+        <li>Na stranici <a href="#mqtt">MQTT</a> upišite adresu brokera (IP adresa HA ili homeassistant.local), port 1883,
+          korisničko ime i lozinku, pa sačuvajte.</li>
+        <li>Uređaj se preko MQTT Discovery sam pojavljuje u Home Assistant-u sa svim senzorima, alarmima i LED indikatorom.</li>
+      </ol>
+      <h4>4. Ostalo</h4>
+      <ul>
+        <li>Vreme se samo sinhronizuje preko NTP-a čim stanica dobije internet.</li>
+        <li>Ako firmware ažurirate sa računara (PlatformIO), u <code>secrets/ota.ini</code> promenite <code>host</code> na novu IP adresu.</li>
+        <li>Preporuka: na novom ruteru stanici dodelite stalnu IP adresu (DHCP rezervacija).</li>
+      </ul>
     </div>`;
 
   const df = $('#display-form');
