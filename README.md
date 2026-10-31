@@ -67,6 +67,9 @@ pio run -t uploadfs      # web interfejs (folder data/) preko USB-a
    administratorsku lozinku.
 3. Posle povezivanja stanica je dostupna na prikazanoj IP adresi i na `http://meteo-esp32.local`.
 
+Premeštanje stanice na drugu Wi-Fi mrežu i drugi Home Assistant je opisano korak po korak u samom web
+interfejsu: Podešavanja → Premeštanje na drugu mrežu i drugi Home Assistant.
+
 > **Bezbednost:** podrazumevane lozinke se izvode iz MAC adrese uređaja i nisu tajne. Posle prvog
 > podešavanja obavezno promenite **administratorsku lozinku i lozinku pristupne tačke**
 > (Podešavanja → Pristup). Uređaj nije namenjen direktnom izlaganju internetu.
