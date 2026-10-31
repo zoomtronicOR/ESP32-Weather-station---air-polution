@@ -31,10 +31,12 @@ Home Assistant preko MQTT-a i ažurira se preko Wi-Fi-ja (OTA). Radi i bez inter
 | Kontrolna tabla (kartice) | Kontrolna tabla (instrumenti) |
 |---|---|
 | ![Kontrolna tabla](docs/screenshots/dashboard.png) | ![Instrumenti](docs/screenshots/instrumenti.png) |
-| **Istorija** | **Senzori i povezivanje** |
-| ![Istorija](docs/screenshots/istorija.png) | ![Senzori](docs/screenshots/senzori.png) |
-| **Alarmiranje** | **Sistem** |
-| ![Alarmiranje](docs/screenshots/alarmi.png) | ![Sistem](docs/screenshots/sistem.png) |
+| **Istorija** | **Statistika** |
+| ![Istorija](docs/screenshots/istorija.png) | ![Statistika](docs/screenshots/statistika.png) |
+| **Senzori i povezivanje** | **Alarmiranje** |
+| ![Senzori](docs/screenshots/senzori.png) | ![Alarmiranje](docs/screenshots/alarmi.png) |
+| **Sistem** | |
+| ![Sistem](docs/screenshots/sistem.png) | |
 
 ## Hardver
 
